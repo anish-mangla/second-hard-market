@@ -4,6 +4,7 @@ from sqlalchemy.orm import sessionmaker, relationship
 import os
 from datetime import datetime
 from database.db_setup import DB_NAME
+import urllib.parse
 
 # Define your MySQL connection string
 # Get MySQL credentials from environment or use defaults
@@ -11,8 +12,11 @@ DB_HOST = os.environ.get('DB_HOST', 'localhost')
 DB_USER = os.environ.get('DB_USER', 'root')
 DB_PASSWORD = os.environ.get('DB_PASSWORD', 'Kkhiladi@420')
 
+# URL encode the password to handle special characters like @
+encoded_password = urllib.parse.quote_plus(DB_PASSWORD)
+
 # Create SQLAlchemy engine and session
-connection_string = f"mysql+mysqlconnector://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}"
+connection_string = f"mysql+mysqlconnector://{DB_USER}:{encoded_password}@{DB_HOST}/{DB_NAME}"
 engine = create_engine(connection_string)
 Session = sessionmaker(bind=engine)
 

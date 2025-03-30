@@ -8,6 +8,7 @@ import io
 from datetime import datetime, timedelta
 import calendar
 import decimal
+from database.transaction_manager import transaction, IsolationLevel
 
 # Helper function to convert Decimal to int/float
 def convert_decimal(value):
@@ -280,6 +281,118 @@ def display_price_condition_analysis():
             st.markdown("##### Price Range Distribution")
             price_df.columns = ['Price Range', 'Count']
             st.dataframe(price_df)
+
+def show_marketplace_stats(start_date=None, end_date=None):
+    """Show overall marketplace statistics"""
+    try:
+        # Use READ COMMITTED isolation for reports - balance between consistency and performance
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            st.write("Using transactions with READ COMMITTED isolation level for report generation")
+            
+            cursor.execute("CALL get_marketplace_stats(%s, %s)", [start_date, end_date])
+            stats = cursor.fetchone()
+            
+            if stats:
+                col1, col2, col3, col4 = st.columns(4)
+                
+                with col1:
+                    st.metric("Total Items", int(stats["total_items"]))
+                
+                with col2:
+                    st.metric("Available Items", int(stats["available_count"]))
+                
+                with col3:
+                    st.metric("Sold Items", int(stats["sold_count"]))
+                
+                with col4:
+                    st.metric("Average Price", f"${float(stats['avg_price']):.2f}")
+    except Exception as e:
+        st.error(f"Error generating marketplace stats: {str(e)}")
+
+def show_category_analysis(start_date=None, end_date=None):
+    """Show analysis by category"""
+    try:
+        # Use READ COMMITTED for category analysis
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            cursor.execute("CALL category_analysis(%s, %s)", [start_date, end_date])
+            category_data = cursor.fetchall()
+            
+            if category_data:
+                # Display as a bar chart and a table
+                category_counts = {row['category'] if row['category'] else 'Uncategorized': row['item_count'] 
+                                for row in category_data}
+                
+                # ... rest of the display code remains unchanged ...
+    except Exception as e:
+        st.error(f"Error generating category analysis: {str(e)}")
+
+def show_complex_statistics():
+    """Show more complex statistics that benefit from SERIALIZABLE isolation"""
+    try:
+        # Use SERIALIZABLE for complex reports that need to be consistent
+        with transaction(IsolationLevel.SERIALIZABLE) as (conn, cursor):
+            st.write("Using SERIALIZABLE isolation for complex statistical analysis")
+            
+            # Get average items per seller
+            cursor.execute("""
+                SELECT 
+                    COUNT(DISTINCT seller_id) as seller_count,
+                    COUNT(*) as item_count,
+                    ROUND(COUNT(*) / COUNT(DISTINCT seller_id), 2) as avg_items_per_seller
+                FROM items
+            """)
+            seller_stats = cursor.fetchone()
+            
+            # Get price distribution
+            cursor.execute("CALL price_distribution()")
+            price_data = cursor.fetchall()
+            
+            # Display the seller statistics
+            if seller_stats:
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total Sellers", int(seller_stats["seller_count"]))
+                with col2:
+                    st.metric("Total Items", int(seller_stats["item_count"]))
+                with col3:
+                    st.metric("Avg Items/Seller", float(seller_stats["avg_items_per_seller"]))
+                
+            # Display price distribution
+            if price_data:
+                # ... display code for price distribution ...
+                price_ranges = [row['price_range'] for row in price_data]
+                item_counts = [row['item_count'] for row in price_data]
+                
+                # Create a DataFrame for the chart
+                df = pd.DataFrame({
+                    'Price Range': price_ranges,
+                    'Item Count': item_counts
+                })
+                
+                # Create a bar chart
+                fig, ax = plt.subplots(figsize=(10, 6))
+                bars = ax.bar(price_ranges, item_counts, color='skyblue')
+                ax.set_xlabel('Price Range')
+                ax.set_ylabel('Number of Items')
+                ax.set_title('Price Distribution of Items')
+                ax.tick_params(axis='x', rotation=45)
+                
+                # Add the count on top of each bar
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.annotate(f'{height}',
+                                xy=(bar.get_x() + bar.get_width() / 2, height),
+                                xytext=(0, 3),  # 3 points vertical offset
+                                textcoords="offset points",
+                                ha='center', va='bottom')
+                
+                plt.tight_layout()
+                st.pyplot(fig)
+                
+                # Also show as a table
+                st.dataframe(df)
+    except Exception as e:
+        st.error(f"Error generating complex statistics: {str(e)}")
 
 def app():
     reports_page()

@@ -7,6 +7,7 @@ from PIL import Image
 import base64
 import datetime
 from database.create_procedures import create_procedures
+from database.transaction_manager import transaction, IsolationLevel, update_item_status_safely
 
 def view_items_page():
     st.title("Browse Items")
@@ -445,15 +446,18 @@ def display_item_details(row):
             
     with col_edit:
         if st.button(f"Edit Item", key=f"edit_{row['item_id']}"):
-            edit_item_form(row['item_id'])
+            st.session_state.show_edit_form = True
+            st.session_state.item_to_edit = row['item_id']
+            st.rerun()
             
     with col_delete:
         if st.button(f"Delete Item", key=f"delete_{row['item_id']}"):
-            delete_item(row['item_id'])
-            st.warning(f"Item {row['item_id']} deleted.")
+            st.session_state.show_delete_confirmation = True
+            st.session_state.item_to_delete = row['item_id']
             st.rerun()
 
 def edit_item_form(item_id):
+    """Show form to edit an item"""
     st.subheader(f"Edit Item {item_id}")
     con = get_connection()
     cur = con.cursor(dictionary=True)
@@ -476,14 +480,12 @@ def edit_item_form(item_id):
         
         new_description = st.text_area("Description", item_data["description"])
         
-        # Two columns for price and condition
-        col1, col2 = st.columns(2)
-        with col1:
-            new_price = st.number_input("Price", min_value=0.0, value=float(item_data["price"] or 0.0), format="%.2f")
-        with col2:
-            all_conditions = ["New", "Used - Like New", "Used - Good", "Used - Acceptable", "For parts"]
-            default_idx = all_conditions.index(item_data["condition_status"]) if item_data["condition_status"] in all_conditions else 0
-            new_condition = st.selectbox("Condition", all_conditions, index=default_idx)
+        # Use form layout without nested columns
+        new_price = st.number_input("Price", min_value=0.0, value=float(item_data["price"] or 0.0), format="%.2f")
+        
+        all_conditions = ["New", "Used - Like New", "Used - Good", "Used - Acceptable", "For parts"]
+        default_idx = all_conditions.index(item_data["condition_status"]) if item_data["condition_status"] in all_conditions else 0
+        new_condition = st.selectbox("Condition", all_conditions, index=default_idx)
         
         # Image upload (with current image preview if available)
         if item_data.get('image_data'):
@@ -513,70 +515,121 @@ def edit_item_form(item_id):
         )
         
         submitted = st.form_submit_button("Save Changes")
-        if submitted:
-            # Prepare query and parameters
-            update_query = """
-                UPDATE items
-                SET title=%s, description=%s, price=%s, condition_status=%s, 
-                    category=%s, contact_preference=%s, location=%s, status=%s
-            """
-            params = [new_title, new_description, new_price, new_condition, 
-                     new_category, new_contact, new_location, new_status]
-            
-            # Handle image update if a new one is uploaded
-            if uploaded_file is not None:
-                update_query += ", image_data=%s"
-                params.append(uploaded_file.getvalue())
-            
-            # Complete the query and execute
-            update_query += " WHERE item_id=%s"
-            params.append(item_id)
-            
-            upd_cur = con.cursor()
-            upd_cur.execute(update_query, params)
-            con.commit()
-            upd_cur.close()
-            con.close()
-
-            st.success("Item updated successfully!")
+        cancel = st.form_submit_button("Cancel")
+        
+        if cancel:
+            st.session_state.show_edit_form = False
             st.rerun()
+            
+        if submitted:
+            try:
+                # Use transaction for item update with REPEATABLE READ isolation
+                with transaction(IsolationLevel.REPEATABLE_READ) as (conn, cursor):
+                    # Prepare query and parameters
+                    update_query = """
+                        UPDATE items
+                        SET title=%s, description=%s, price=%s, condition_status=%s, 
+                            category=%s, contact_preference=%s, location=%s, status=%s
+                    """
+                    params = [new_title, new_description, new_price, new_condition, 
+                             new_category, new_contact, new_location, new_status]
+                    
+                    # Handle image update if a new one is uploaded
+                    if uploaded_file is not None:
+                        update_query += ", image_data=%s"
+                        params.append(uploaded_file.getvalue())
+                    
+                    # Complete the query and execute
+                    update_query += " WHERE item_id=%s"
+                    params.append(item_id)
+                    
+                    cursor.execute(update_query, params)
+                    conn.commit()
+
+                st.success("Item updated successfully!")
+                # Clear the edit form state
+                st.session_state.show_edit_form = False
+                # Add a small delay to show the success message
+                import time
+                time.sleep(1)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Error updating item: {str(e)}")
         else:
             con.close()
 
 def delete_item(item_id):
-    # Confirm deletion with a modal
-    if 'confirm_delete' not in st.session_state:
-        st.session_state.confirm_delete = False
-    
-    if not st.session_state.confirm_delete:
-        st.warning("Are you sure you want to delete this item? This cannot be undone.")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("Cancel"):
-                st.session_state.confirm_delete = False
-                return
-        with col2:
-            if st.button("Yes, Delete It"):
-                st.session_state.confirm_delete = True
-    
-    if st.session_state.confirm_delete:
-        # Proceed with deletion
-        con = get_connection()
-        cur = con.cursor()
-        cur.execute("DELETE FROM items WHERE item_id = %s", (item_id,))
-        con.commit()
-        cur.close()
-        con.close()
-        st.success("Item deleted successfully!")
-        st.session_state.confirm_delete = False
-        # Delay the rerun slightly to show the success message
-        st.rerun()
+    """Delete an item after confirmation"""
+    try:
+        # Use a transaction with SERIALIZABLE isolation to ensure data consistency
+        with transaction(IsolationLevel.SERIALIZABLE) as (conn, cursor):
+            # Check if the item exists and can be deleted
+            cursor.execute("SELECT status FROM items WHERE item_id = %s FOR UPDATE", (item_id,))
+            item = cursor.fetchone()
+            
+            if not item:
+                st.error(f"Item {item_id} not found")
+                return False
+            
+            # Perform the deletion
+            cursor.execute("DELETE FROM items WHERE item_id = %s", (item_id,))
+            
+            if cursor.rowcount > 0:
+                return True
+            else:
+                st.error("Failed to delete item")
+                return False
+    except Exception as e:
+        st.error(f"Error deleting item: {str(e)}")
+        return False
 
 def app():
-    # Initialize session state for selected item if not exists
+    # Initialize session state if not exists
     if 'selected_item' not in st.session_state:
         st.session_state.selected_item = None
         
+    # Show edit form if flag is set (before any other UI elements)
+    if 'show_edit_form' in st.session_state and st.session_state.show_edit_form:
+        item_id = st.session_state.item_to_edit
+        edit_item_form(item_id)
+        # Add a "Back to browsing" button
+        if st.button("Back to browsing without saving"):
+            st.session_state.show_edit_form = False
+            st.rerun()
+        return  # Exit early to not show the main page
+    
+    # Show delete confirmation dialog if flag is set
+    if 'show_delete_confirmation' in st.session_state and st.session_state.show_delete_confirmation:
+        item_id = st.session_state.item_to_delete
+        
+        # Create a container for the confirmation dialog to make it more prominent
+        with st.container():
+            st.warning(f"⚠️ Are you sure you want to delete this item? This action cannot be undone.")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("Cancel", key="cancel_delete_final"):
+                    # Clear the confirmation state and rerun
+                    st.session_state.show_delete_confirmation = False
+                    del st.session_state.item_to_delete
+                    st.rerun()
+                    
+            with col2:
+                if st.button("Yes, Delete It", key="confirm_delete_final", type="primary"):
+                    # Perform the actual deletion
+                    success = delete_item(item_id)
+                    
+                    if success:
+                        st.success("Item deleted successfully!")
+                        # Clear the confirmation state
+                        st.session_state.show_delete_confirmation = False
+                        del st.session_state.item_to_delete
+                        # Add a small delay to show the success message
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+        return  # Exit early to not show the main page
+    
     view_items_page()
 
 if __name__ == "__main__":

@@ -4,3 +4,6 @@ pillow
 pandas
 matplotlib
 sqlalchemy
+pytest
+pytest-cov
+transactions

@@ -8,6 +8,7 @@ import base64
 from PIL import Image
 import io
 from decimal import Decimal
+from database.transaction_manager import transaction, IsolationLevel, sqlalchemy_transaction
 
 def get_user_info(user_id):
     """Get the user information for the current user using ORM"""
@@ -95,7 +96,6 @@ def create_item_page():
             
             submitted = st.form_submit_button("Create Item")
             if submitted:
-                # Validate required fields
                 if not title or not description or price <= 0:
                     st.error("Please fill out all required fields.")
                 elif contact_preference == "Email" and not seller_email:
@@ -103,38 +103,56 @@ def create_item_page():
                 elif contact_preference == "Phone" and not seller_phone:
                     st.error("You selected Phone as your preferred contact method but didn't provide a phone number.")
                 else:
-                    # Insert into database using SQLAlchemy ORM
                     try:
-                        # Create a new Item object
-                        new_item = Item(
-                            title=title,
-                            description=description,
-                            price=Decimal(price),
-                            condition_status=condition_status,
-                            seller_id=seller_id,
-                            category=category,
-                            contact_preference=contact_preference,
-                            location=location,
-                            created_at=datetime.datetime.now(),
-                            image_data=image_data
-                        )
+                        # Convert form data
+                        price_float = float(price)
                         
-                        # Add to database
+                        # Process image
+                        image_data = None
+                        if uploaded_file is not None:
+                            image_data = uploaded_file.getvalue()
+                        
+                        # Create new item using SQLAlchemy transaction with SERIALIZABLE isolation
                         session = get_session()
-                        session.add(new_item)
-                        session.commit()
                         
-                        # Get the ID of the newly created item
-                        item_id = new_item.item_id
+                        with sqlalchemy_transaction(session, IsolationLevel.SERIALIZABLE) as session:
+                            # Verify seller exists
+                            seller = session.query(User).filter(User.user_id == seller_id).first()
+                            
+                            if not seller:
+                                st.error(f"Seller ID {seller_id} does not exist")
+                                return
+                            
+                            # Create new item
+                            new_item = Item(
+                                title=title,
+                                description=description,
+                                price=Decimal(str(price_float)),
+                                condition_status=condition_status,
+                                seller_id=seller_id,
+                                category=category,
+                                contact_preference=contact_preference,
+                                location=location,
+                                image_data=image_data
+                            )
+                            
+                            session.add(new_item)
+                            # Transaction will be committed at the end of the context manager
                         
-                        session.close()
+                        st.success(f"Item '{title}' successfully created!")
+                        st.balloons()
                         
-                        st.success(f"Item '{title}' created successfully!")
+                        # Clear form
+                        st.session_state["title"] = ""
+                        st.session_state["description"] = ""
+                        st.session_state["price"] = ""
+                        st.session_state["uploaded_file"] = None
                         
-                        # Show a link to view the item
-                        st.markdown(f"[View your listing →](/View_Items?item_id={item_id})")
+                        # Add a flag to session state to indicate we should redirect
+                        st.session_state["item_created"] = True
                     except Exception as e:
-                        st.error(f"An error occurred: {e}")
+                        st.error(f"Error creating item: {str(e)}")
+                        st.error("Please try again or contact support if the issue persists.")
 
     # Preview column
     with col2:
@@ -157,7 +175,7 @@ def create_item_page():
         # Display image preview if uploaded
         if 'uploaded_file' in locals() and uploaded_file is not None:
             try:
-                image = Image.open(io.BytesIO(uploaded_file.getvalue()))
+                image = Image.open(io.BytesIO(uploaded_file))
                 st.image(image, caption="Item image", use_container_width=True)
             except Exception:
                 st.error("Could not display image preview.")
@@ -176,6 +194,12 @@ def create_item_page():
                 
         st.markdown("---")
         st.markdown("*This is how your item will appear to buyers*")
+
+    # Navigation button outside the form
+    if "item_created" in st.session_state and st.session_state["item_created"]:
+        st.session_state["item_created"] = False  # Reset the flag
+        st.success("Redirecting to View Items page...")
+        st.switch_page("pages/2_View_Items.py")
 
 def app():
     create_item_page()

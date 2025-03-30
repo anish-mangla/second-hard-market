@@ -1,0 +1,244 @@
+SECONDHAND MARKET DATABASE DESIGN
+================================
+
+This document explains the database design for the SecondHand Market application.
+
+ENTITY-RELATIONSHIP DIAGRAM
+---------------------------
+
+Users              Items                Categories
+--------------     ----------------     ---------------
+PK: user_id  <--+  PK: item_id          PK: category_id
+username        |  title                name
+email           |  description          description
+phone           |  price                parent_cat_id <-+
+password        |  condition            created_at     |
+                |  FK: seller_id -------+              |
+                |  FK: category_id -----+              |
+                |  status               +---------------
+                |  created_at
+                |  contact_preference
+                |  location
+                |  image_data
+                |      |
+                |      v
+                |  Transactions
+                |  ---------------
+                |  PK: transaction_id
+                +--FK: seller_id
+                +--FK: buyer_id
+                   FK: item_id
+                   transaction_date
+                   price
+                   status
+                   payment_method
+                   notes
+
+
+DATABASE SCHEMA
+--------------
+
+Users Table:
+Column Name    | Data Type       | Constraints         | Description
+---------------|-----------------|---------------------|----------------------------------
+user_id        | INT             | PK, AUTO_INCREMENT  | Unique identifier for each user
+username       | VARCHAR(100)    | NOT NULL            | User's display name
+email          | VARCHAR(255)    |                     | User's email address
+phone          | VARCHAR(50)     |                     | User's phone number
+password_hash  | VARCHAR(255)    |                     | Hashed user password
+
+Categories Table:
+Column Name        | Data Type       | Constraints         | Description
+-------------------|-----------------|---------------------|----------------------------------
+category_id        | INT             | PK, AUTO_INCREMENT  | Unique identifier for category
+name               | VARCHAR(100)    | NOT NULL            | Category name
+description        | TEXT            |                     | Category description
+parent_category_id | INT             | FK                  | Parent category (hierarchical)
+created_at         | DATETIME        | DEFAULT NOW()       | When category was created
+
+Items Table:
+Column Name        | Data Type       | Constraints         | Description
+-------------------|-----------------|---------------------|----------------------------------
+item_id            | INT             | PK, AUTO_INCREMENT  | Unique identifier for item
+title              | VARCHAR(255)    | NOT NULL            | Item title/name
+description        | TEXT            |                     | Detailed item description
+price              | DECIMAL(10,2)   |                     | Item price
+condition_status   | VARCHAR(50)     |                     | Item condition (New, Used, etc.)
+created_at         | DATETIME        | DEFAULT NOW()       | When listing was created
+status             | VARCHAR(50)     | DEFAULT 'Available' | Item status (Available, Sold)
+seller_id          | INT             | FK                  | Reference to user who listed item
+category_id        | INT             | FK                  | Reference to item category
+contact_preference | VARCHAR(50)     |                     | Preferred contact method
+location           | VARCHAR(255)    |                     | Item location
+image_data         | LONGBLOB        |                     | Item image
+
+Transactions Table:
+Column Name       | Data Type       | Constraints          | Description
+------------------|-----------------|----------------------|----------------------------------
+transaction_id    | INT             | PK, AUTO_INCREMENT   | Unique transaction identifier
+item_id           | INT             | FK, NOT NULL         | Reference to sold item
+seller_id         | INT             | FK, NOT NULL         | Reference to seller
+buyer_id          | INT             | FK, NOT NULL         | Reference to buyer
+transaction_date  | DATETIME        | DEFAULT NOW()        | When transaction occurred
+price             | DECIMAL(10,2)   | NOT NULL             | Final sale price
+status            | VARCHAR(50)     | DEFAULT 'Completed'  | Transaction status
+payment_method    | VARCHAR(50)     |                      | Method of payment
+notes             | TEXT            |                      | Additional transaction notes
+
+
+TABLE RELATIONSHIPS
+------------------
+
+One-to-Many Relationships:
+1. Users to Items: One user can list many items (seller_id in items table)
+2. Categories to Items: One category can contain many items (category_id in items table)
+3. Categories to Categories: One category can have many subcategories (parent_category_id)
+
+Many-to-One Relationships:
+1. Items to Users: Many items can be listed by one user
+2. Items to Categories: Many items can belong to one category
+
+Relationships with Transactions:
+1. Users to Transactions (as seller): One user can sell many items
+2. Users to Transactions (as buyer): One user can buy many items
+3. Items to Transactions: One item can have one transaction (when sold)
+
+
+NORMALIZATION
+------------
+
+First Normal Form (1NF):
+- All tables have primary keys
+- All columns contain atomic values (no multi-valued attributes)
+- No repeating groups
+
+Second Normal Form (2NF):
+- All tables are in 1NF
+- All non-key attributes fully depend on the primary key
+  - Example: item details depend only on item_id
+
+Third Normal Form (3NF):
+- All tables are in 2NF
+- No transitive dependencies
+  - Example: category details are stored in a separate categories table
+
+
+SQL IMPLEMENTATION
+----------------
+
+Users Table:
+CREATE TABLE users (
+    user_id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    email VARCHAR(255),
+    phone VARCHAR(50),
+    password_hash VARCHAR(255)
+);
+
+Categories Table:
+CREATE TABLE categories (
+    category_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    parent_category_id INT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_category_id) REFERENCES categories(category_id) ON DELETE SET NULL
+);
+
+Items Table:
+CREATE TABLE items (
+    item_id INT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    price DECIMAL(10, 2),
+    condition_status VARCHAR(50),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status VARCHAR(50) DEFAULT 'Available',
+    seller_id INT,
+    category_id INT,
+    contact_preference VARCHAR(50),
+    location VARCHAR(255),
+    image_data LONGBLOB,
+    FOREIGN KEY (seller_id) REFERENCES users(user_id),
+    FOREIGN KEY (category_id) REFERENCES categories(category_id)
+);
+
+Transactions Table:
+CREATE TABLE transactions (
+    transaction_id INT AUTO_INCREMENT PRIMARY KEY,
+    item_id INT NOT NULL,
+    seller_id INT NOT NULL,
+    buyer_id INT NOT NULL,
+    transaction_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    price DECIMAL(10, 2) NOT NULL,
+    status VARCHAR(50) DEFAULT 'Completed',
+    payment_method VARCHAR(50),
+    notes TEXT,
+    FOREIGN KEY (item_id) REFERENCES items(item_id),
+    FOREIGN KEY (seller_id) REFERENCES users(user_id),
+    FOREIGN KEY (buyer_id) REFERENCES users(user_id)
+);
+
+
+QUERY EXAMPLES
+-------------
+
+Simple Selection Query:
+SELECT * FROM items WHERE status = 'Available' ORDER BY created_at DESC;
+
+Filtering with Multiple Conditions:
+SELECT * FROM items 
+WHERE category_id = 1
+  AND price BETWEEN 10 AND 50
+  AND condition_status = 'Like New';
+
+Join Operations:
+SELECT i.*, u.username, u.email, c.name as category 
+FROM items i 
+LEFT JOIN users u ON i.seller_id = u.user_id 
+LEFT JOIN categories c ON i.category_id = c.category_id
+WHERE i.status = 'Available';
+
+Aggregation Queries:
+SELECT 
+    c.name AS category, 
+    COUNT(*) AS item_count,
+    AVG(price) AS avg_price,
+    SUM(CASE WHEN status = 'Sold' THEN 1 ELSE 0 END) AS sold_count
+FROM items i
+JOIN categories c ON i.category_id = c.category_id
+GROUP BY c.category_id
+ORDER BY item_count DESC;
+
+
+STORED PROCEDURES
+----------------
+
+Get Marketplace Stats:
+CREATE PROCEDURE get_marketplace_stats(IN start_date_param VARCHAR(20), IN end_date_param VARCHAR(20))
+BEGIN
+    SELECT 
+        COUNT(*) AS total_items,
+        SUM(CASE WHEN status = 'Available' THEN 1 ELSE 0 END) AS available_count,
+        SUM(CASE WHEN status = 'Sold' THEN 1 ELSE 0 END) AS sold_count,
+        ROUND(AVG(price), 2) AS avg_price
+    FROM items
+    WHERE (start_date_param IS NULL OR created_at >= start_date_param)
+    AND (end_date_param IS NULL OR created_at <= end_date_param);
+END
+
+Category Analysis:
+CREATE PROCEDURE category_analysis(IN start_date_param VARCHAR(20), IN end_date_param VARCHAR(20))
+BEGIN
+    SELECT 
+        COALESCE(c.name, 'Uncategorized') AS category,
+        COUNT(i.item_id) AS item_count,
+        ROUND(AVG(i.price), 2) AS avg_price,
+        SUM(CASE WHEN i.status = 'Sold' THEN 1 ELSE 0 END) AS sold_count
+    FROM items i
+    LEFT JOIN categories c ON i.category_id = c.category_id
+    WHERE (start_date_param IS NULL OR i.created_at >= start_date_param)
+    AND (end_date_param IS NULL OR i.created_at <= end_date_param)
+    GROUP BY IFNULL(c.category_id, 0), category
+    ORDER BY item_count DESC;
+END 

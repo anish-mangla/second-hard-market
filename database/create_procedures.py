@@ -35,12 +35,12 @@ def create_procedures():
     CREATE PROCEDURE category_analysis(IN start_date_param VARCHAR(20), IN end_date_param VARCHAR(20))
     BEGIN
         SELECT 
-            c.name AS category,
+            COALESCE(c.name, 'Uncategorized') AS category,
             COUNT(i.item_id) AS item_count,
             ROUND(AVG(i.price), 2) AS avg_price,
-            COUNT(CASE WHEN i.status = 'Sold' THEN 1 ELSE NULL END) AS sold_count
+            SUM(CASE WHEN i.status = 'Sold' THEN 1 ELSE 0 END) AS sold_count
         FROM items i
-        JOIN categories c ON i.category_id = c.category_id
+        LEFT JOIN categories c ON i.category_id = c.category_id
         WHERE (start_date_param IS NULL OR i.created_at >= start_date_param)
         AND (end_date_param IS NULL OR i.created_at <= end_date_param)
         GROUP BY c.category_id

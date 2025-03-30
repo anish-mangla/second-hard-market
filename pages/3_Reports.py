@@ -118,16 +118,24 @@ def show_marketplace_stats(start_date=None, end_date=None):
                     col1, col2, col3, col4 = st.columns(4)
                     
                     with col1:
-                        st.metric("Total Items", int(stats["total_items"]))
+                        # Add safety checks to handle None values
+                        total_items = stats["total_items"] if stats["total_items"] is not None else 0
+                        st.metric("Total Items", int(total_items))
                     
                     with col2:
-                        st.metric("Available Items", int(stats["available_count"]))
+                        # Add safety checks to handle None values
+                        available_count = stats["available_count"] if stats["available_count"] is not None else 0
+                        st.metric("Available Items", int(available_count))
                     
                     with col3:
-                        st.metric("Sold Items", int(stats["sold_count"]))
+                        # Add safety checks to handle None values
+                        sold_count = stats["sold_count"] if stats["sold_count"] is not None else 0
+                        st.metric("Sold Items", int(sold_count))
                     
                     with col4:
-                        st.metric("Average Price", f"${float(stats['avg_price']):.2f}")
+                        # Add safety checks to handle None values
+                        avg_price = stats["avg_price"] if stats["avg_price"] is not None else 0
+                        st.metric("Average Price", f"${float(avg_price):.2f}")
                 
                 # Additional marketplace statistics if available
                 try:
@@ -153,15 +161,21 @@ def show_marketplace_stats(start_date=None, end_date=None):
                             st.markdown("#### Sellers & Categories")
                             col_a, col_b = st.columns(2)
                             with col_a:
-                                st.metric("Active Sellers", health_stats["unique_sellers"])
+                                # Add safety checks for None values
+                                unique_sellers = health_stats["unique_sellers"] if health_stats["unique_sellers"] is not None else 0
+                                st.metric("Active Sellers", unique_sellers)
                             with col_b:
-                                st.metric("Active Categories", health_stats["active_categories"])
+                                # Add safety checks for None values
+                                active_categories = health_stats["active_categories"] if health_stats["active_categories"] is not None else 0
+                                st.metric("Active Categories", active_categories)
                         
                         with col2:
                             st.markdown("#### Listing Activity")
                             col_a, col_b = st.columns(2)
                             with col_a:
-                                st.metric("New Listings (7d)", health_stats["new_listings_7days"])
+                                # Add safety checks for None values
+                                new_listings = health_stats["new_listings_7days"] if health_stats["new_listings_7days"] is not None else 0
+                                st.metric("New Listings (7d)", new_listings)
                             with col_b:
                                 if health_stats["last_listing_date"]:
                                     st.metric("Last Item Listed", health_stats["last_listing_date"].strftime("%Y-%m-%d"))
@@ -176,6 +190,15 @@ def show_category_analysis(start_date=None, end_date=None):
     try:
         # Use READ COMMITTED for category analysis
         with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            # First check if there are any items at all
+            cursor.execute("SELECT COUNT(*) as item_count FROM items")
+            item_count = cursor.fetchone()['item_count']
+            
+            if item_count == 0:
+                st.info("No items in the database yet. Add some items to see category analysis.")
+                return
+            
+            # Then proceed with category analysis
             cursor.execute("CALL category_analysis(%s, %s)", [start_date, end_date])
             category_data = cursor.fetchall()
             
@@ -191,7 +214,8 @@ def show_category_analysis(start_date=None, end_date=None):
                 # Display as a bar chart 
                 fig, ax = plt.subplots(figsize=(10, 6))
                 categories = [row['category'] or 'Uncategorized' for row in category_data]
-                item_counts = [row['item_count'] for row in category_data]
+                # Ensure item_count values are not None
+                item_counts = [row['item_count'] if row['item_count'] is not None else 0 for row in category_data]
                 
                 # Use a more attractive color palette
                 colors = plt.cm.Greens(np.linspace(0.5, 0.9, len(categories)))
@@ -228,7 +252,8 @@ def show_category_analysis(start_date=None, end_date=None):
                 # Display detailed metrics as a table
                 st.markdown("### Category Details")
                 display_df = df.copy()
-                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x):.2f}")
+                # Handle None values in avg_price
+                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x if x is not None else 0):.2f}")
                 display_df = display_df.rename(columns={
                     'category': 'Category',
                     'item_count': 'Total Items',
@@ -262,7 +287,8 @@ def show_price_distribution():
                 
             # Create a pandas DataFrame for the visualization
             price_ranges = [row['price_range'] for row in price_data]
-            item_counts = [row['item_count'] for row in price_data]
+            # Ensure item_count values are not None
+            item_counts = [row['item_count'] if row['item_count'] is not None else 0 for row in price_data]
             
             df = pd.DataFrame({
                 'Price Range': price_ranges,
@@ -334,9 +360,10 @@ def show_condition_price_analysis():
                 # Display condition data as a table
                 st.markdown("#### Condition Price Summary")
                 display_df = condition_df.copy()
-                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x):.2f}")
-                display_df['min_price'] = display_df['min_price'].apply(lambda x: f"${float(x):.2f}")
-                display_df['max_price'] = display_df['max_price'].apply(lambda x: f"${float(x):.2f}")
+                # Handle None values in price columns
+                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x if x is not None else 0):.2f}")
+                display_df['min_price'] = display_df['min_price'].apply(lambda x: f"${float(x if x is not None else 0):.2f}")
+                display_df['max_price'] = display_df['max_price'].apply(lambda x: f"${float(x if x is not None else 0):.2f}")
                 
                 display_df = display_df.rename(columns={
                     'condition_status': 'Condition',
@@ -351,7 +378,8 @@ def show_condition_price_analysis():
                 # Create a bar chart of average prices by condition
                 fig, ax = plt.subplots(figsize=(10, 6))
                 conditions = [row['condition_status'] for row in condition_data]
-                avg_prices = [float(row['avg_price']) for row in condition_data]
+                # Handle None values in avg_price
+                avg_prices = [float(row['avg_price'] if row['avg_price'] is not None else 0) for row in condition_data]
                 
                 # Use a color gradient based on condition (green for new, yellow for good, etc)
                 condition_colors = {
@@ -414,9 +442,10 @@ def show_seasonal_trends():
                 
             # Create DataFrames for visualization
             months = [row['month'] for row in monthly_data]
-            item_counts = [row['item_count'] for row in monthly_data]
-            avg_prices = [float(row['avg_price']) for row in monthly_data]
-            sold_counts = [row['sold_count'] for row in monthly_data]
+            # Handle None values in metrics
+            item_counts = [row['item_count'] if row['item_count'] is not None else 0 for row in monthly_data]
+            avg_prices = [float(row['avg_price'] if row['avg_price'] is not None else 0) for row in monthly_data]
+            sold_counts = [row['sold_count'] if row['sold_count'] is not None else 0 for row in monthly_data]
             
             # Format month labels for better display
             formatted_months = []
@@ -615,7 +644,8 @@ def show_transaction_history():
             
             # Display transaction counts and totals
             total_transactions = len(df)
-            total_value = sum(float(t['price']) for t in transactions)
+            # Handle None values in price
+            total_value = sum(float(t['price'] if t['price'] is not None else 0) for t in transactions)
             avg_price = total_value / total_transactions if total_transactions > 0 else 0
             
             # Display summary metrics with colored containers
@@ -649,8 +679,8 @@ def show_transaction_history():
                 'payment_method': 'Payment'
             })
             
-            # Format the price column
-            display_df['Price'] = display_df['Price'].apply(lambda x: f"${float(x):.2f}")
+            # Format the price column and handle None values
+            display_df['Price'] = display_df['Price'].apply(lambda x: f"${float(x if x is not None else 0):.2f}")
             
             # Display the transactions table
             st.dataframe(display_df, use_container_width=True)

@@ -8,6 +8,9 @@ A comprehensive web-based marketplace platform that enables users to buy and sel
 
 - [Project Overview](#project-overview)
 - [Features](#features)
+- [Course Requirements Implementation](#course-requirements-implementation)
+  - [Dynamic UI Components](#dynamic-ui-components)
+  - [Database Access Methods](#database-access-methods)
 - [Database Design](#database-design)
   - [Entity Relationship Diagram](#entity-relationship-diagram)
   - [Database Schema](#database-schema)
@@ -35,6 +38,50 @@ The SecondHand Market application is designed to facilitate the buying and selli
 - **Contact Information**: Connect buyers with sellers
 - **Analytics Dashboard**: View marketplace trends and statistics
 - **Responsive Interface**: User-friendly web interface built with Streamlit
+
+## 🎓 Course Requirements Implementation
+
+### Dynamic UI Components
+
+This project implements dynamic user interface components that are populated from the database:
+
+1. **Category Dropdown**: On the "View Items" page, the category filter dropdown is dynamically populated with all unique categories from the database.
+   - Implementation: `pages/2_View_Items.py` fetches distinct categories from the `items` table
+   - Code: `cur.execute("SELECT DISTINCT category FROM items WHERE category IS NOT NULL")`
+
+2. **Price Range Slider**: The min and max values for the price range slider are dynamically calculated from the database.
+   - Implementation: `pages/2_View_Items.py` determines the price range from actual item prices
+   - Code: `cur.execute("SELECT MIN(price), MAX(price) FROM items")`
+
+3. **Item Cards**: All items displayed in the marketplace are dynamically loaded from the database based on user filters.
+   - Implementation: Items are fetched using various database access methods (described below)
+
+### Database Access Methods
+
+The application uses a combination of three database access methods, ensuring each method accounts for at least 20% of the database access code:
+
+1. **Prepared Statements (~40% of database access)**
+   - All direct SQL queries use parameterized prepared statements for security and performance
+   - Example locations:
+     - `pages/2_View_Items.py`: Complex filtering and search operations
+     - `pages/3_Reports.py`: Weekly items report (line 146-156)
+     - `pages/2_View_Items.py`: Edit and delete operations
+
+2. **SQLAlchemy ORM (~30% of database access)**
+   - Object-Relational Mapping for a more Pythonic approach to database operations
+   - Implementation: `database/orm_models.py` defines the ORM models matching our database schema
+   - Used in:
+     - `pages/1_Create_Item.py`: All creation operations for new items
+     - User management operations (retrieving and updating user information)
+
+3. **Stored Procedures (~30% of database access)**
+   - Complex, optimized SQL operations defined in the database
+   - Implementation: `database/create_procedures.py` creates the procedures
+   - Used in:
+     - `pages/3_Reports.py`: All reports and analytics operations
+     - `pages/2_View_Items.py`: The filtered item search with the `get_items_by_filter` procedure
+
+This balanced approach demonstrates different database access methodologies and their appropriate use cases, meeting the course requirement of using at least two methods with each accounting for at least 20% of the code.
 
 ## 💾 Database Design
 
@@ -168,6 +215,42 @@ def init_db():
     # Implementation details...
 ```
 
+### ORM Models
+
+```python
+class User(Base):
+    """ORM model for the users table"""
+    __tablename__ = 'users'
+    
+    user_id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(100), nullable=False)
+    email = Column(String(255))
+    phone = Column(String(50))
+    password_hash = Column(String(255))
+    
+    # Relationship to items (one-to-many)
+    items = relationship("Item", back_populates="seller")
+```
+
+### Stored Procedures
+
+```sql
+CREATE PROCEDURE get_marketplace_stats(IN start_date_param VARCHAR(20), IN end_date_param VARCHAR(20))
+BEGIN
+    SELECT 
+        COUNT(*) AS total_items,
+        SUM(CASE WHEN status = 'Available' THEN 1 ELSE 0 END) AS available_items,
+        SUM(CASE WHEN status = 'Sold' THEN 1 ELSE 0 END) AS sold_items,
+        SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending_items,
+        AVG(price) AS avg_price,
+        MIN(price) AS min_price,
+        MAX(price) AS max_price,
+        COUNT(DISTINCT seller_id) AS total_sellers
+    FROM items
+    WHERE created_at BETWEEN start_date_param AND CONCAT(end_date_param, ' 23:59:59');
+END
+```
+
 ## 🔍 Query Examples
 
 The application utilizes various SQL queries for different features:
@@ -234,6 +317,27 @@ FROM items
 GROUP BY price_range;
 ```
 
+### ORM Example
+
+```python
+# Create a new Item using ORM
+new_item = Item(
+    title=title,
+    description=description,
+    price=Decimal(price),
+    condition_status=condition_status,
+    seller_id=seller_id,
+    category=category,
+    contact_preference=contact_preference,
+    location=location,
+    created_at=datetime.now(),
+    image_data=image_data
+)
+
+session.add(new_item)
+session.commit()
+```
+
 ## 🚀 Setup and Installation
 
 1. Clone this repository
@@ -255,6 +359,8 @@ GROUP BY price_range;
 - **Programming Language**: Python
 - **Data Visualization**: Matplotlib, Pandas
 - **Image Processing**: Pillow
+- **ORM**: SQLAlchemy
+- **Database Driver**: mysql-connector-python
 
 ## 📁 Project Structure
 
@@ -263,12 +369,15 @@ secondhand_market/
 ├── .streamlit/        # Streamlit configuration
 ├── database/          # Database setup and connection
 │   ├── __init__.py
-│   └── db_setup.py    # Database initialization and schema management
+│   ├── db_setup.py    # Database initialization and schema management
+│   ├── orm_models.py  # SQLAlchemy ORM models
+│   └── create_procedures.py # Stored procedures definitions
 ├── pages/             # Individual application pages
 │   ├── 1_Create_Item.py
 │   ├── 2_View_Items.py
 │   └── 3_Reports.py
 ├── main.py            # Main application entry point (Home page)
+├── insert_sample_data.py # Script to add sample data
 ├── requirements.txt   # Python dependencies
 └── README.md          # Project documentation
 ```

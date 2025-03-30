@@ -19,6 +19,13 @@ def reports_page():
     st.title("Marketplace Reports & Analytics")
     st.write("Get insights into marketplace activity and item statistics.")
     
+    # Check if stored procedures need to be created
+    st.info("This page uses stored procedures to generate reports efficiently.")
+    
+    # Ensure stored procedures exist
+    from database.create_procedures import create_procedures
+    create_procedures()
+    
     # Create tabs for different report types
     tab1, tab2, tab3 = st.tabs(["Overview", "Category Analysis", "Price & Condition Analysis"])
     
@@ -32,7 +39,7 @@ def reports_page():
         display_price_condition_analysis()
 
 def display_overview_stats():
-    """Display overview statistics about the marketplace"""
+    """Display overview statistics about the marketplace using stored procedure"""
     st.header("Marketplace Overview")
     
     # Date range selector for the overview
@@ -46,27 +53,17 @@ def display_overview_stats():
     start_date_str = start_date.strftime('%Y-%m-%d')
     end_date_str = end_date.strftime('%Y-%m-%d')
     
-    # Get basic stats
+    # Get basic stats using stored procedure
     con = get_connection()
     cur = con.cursor(dictionary=True)
     
-    # Overall stats query
-    stats_query = f"""
-        SELECT 
-            COUNT(*) AS total_items,
-            SUM(CASE WHEN status = 'Available' THEN 1 ELSE 0 END) AS available_items,
-            SUM(CASE WHEN status = 'Sold' THEN 1 ELSE 0 END) AS sold_items,
-            SUM(CASE WHEN status = 'Pending' THEN 1 ELSE 0 END) AS pending_items,
-            AVG(price) AS avg_price,
-            MIN(price) AS min_price,
-            MAX(price) AS max_price,
-            COUNT(DISTINCT seller_id) AS total_sellers
-        FROM items
-        WHERE created_at BETWEEN '{start_date_str}' AND '{end_date_str} 23:59:59'
-    """
-    
-    cur.execute(stats_query)
+    # Call the stored procedure
+    cur.execute("CALL get_marketplace_stats(%s, %s)", (start_date_str, end_date_str))
     stats_raw = cur.fetchone()
+    
+    # Need to fetch from next result set (if any)
+    if cur.nextset():
+        pass
     
     # Convert all Decimal values to int/float
     stats = {k: convert_decimal(v) for k, v in stats_raw.items()}
@@ -96,18 +93,18 @@ def display_overview_stats():
     with metric_col4:
         st.metric("Total Sellers", stats["total_sellers"])
     
-    # Get weekly items added
+    # Get weekly items added - using prepared statement for this one
     weekly_query = f"""
         SELECT 
             DATE_FORMAT(created_at, '%Y-%m-%d') AS date,
             COUNT(*) AS num_items
         FROM items
-        WHERE created_at BETWEEN '{start_date_str}' AND '{end_date_str} 23:59:59'
+        WHERE created_at BETWEEN %s AND %s
         GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d')
         ORDER BY date
     """
     
-    cur.execute(weekly_query)
+    cur.execute(weekly_query, (start_date_str, end_date_str + " 23:59:59"))
     weekly_results_raw = cur.fetchall()
     cur.close()
     con.close()
@@ -134,26 +131,15 @@ def display_overview_stats():
         st.info("No data available for the selected date range.")
 
 def display_category_analysis():
-    """Display category-based analysis"""
+    """Display category-based analysis using stored procedure"""
     st.header("Category Analysis")
     
-    # Get category distribution
+    # Get category distribution using stored procedure
     con = get_connection()
     cur = con.cursor(dictionary=True)
     
-    category_query = """
-        SELECT 
-            category, 
-            COUNT(*) AS item_count,
-            AVG(price) AS avg_price,
-            SUM(CASE WHEN status = 'Sold' THEN 1 ELSE 0 END) AS sold_count
-        FROM items
-        WHERE category IS NOT NULL
-        GROUP BY category
-        ORDER BY item_count DESC
-    """
-    
-    cur.execute(category_query)
+    # Call the stored procedure
+    cur.execute("CALL get_category_analysis()")
     category_results_raw = cur.fetchall()
     cur.close()
     con.close()
@@ -215,7 +201,7 @@ def display_price_condition_analysis():
     """Display price and condition analysis"""
     st.header("Price & Condition Analysis")
     
-    # Get condition distribution
+    # Get condition distribution using prepared statement 
     con = get_connection()
     cur = con.cursor(dictionary=True)
     
@@ -241,36 +227,8 @@ def display_price_condition_analysis():
     cur.execute(condition_query)
     condition_results_raw = cur.fetchall()
     
-    # Get price distribution
-    price_query = """
-        SELECT 
-            CASE
-                WHEN price BETWEEN 0 AND 10 THEN '$0-$10'
-                WHEN price BETWEEN 10 AND 25 THEN '$10-$25'
-                WHEN price BETWEEN 25 AND 50 THEN '$25-$50'
-                WHEN price BETWEEN 50 AND 100 THEN '$50-$100'
-                WHEN price BETWEEN 100 AND 250 THEN '$100-$250'
-                WHEN price BETWEEN 250 AND 500 THEN '$250-$500'
-                WHEN price > 500 THEN '$500+'
-                ELSE 'Unknown'
-            END AS price_range,
-            COUNT(*) AS item_count
-        FROM items
-        GROUP BY price_range
-        ORDER BY 
-            CASE
-                WHEN price_range = '$0-$10' THEN 1
-                WHEN price_range = '$10-$25' THEN 2
-                WHEN price_range = '$25-$50' THEN 3
-                WHEN price_range = '$50-$100' THEN 4
-                WHEN price_range = '$100-$250' THEN 5
-                WHEN price_range = '$250-$500' THEN 6
-                WHEN price_range = '$500+' THEN 7
-                ELSE 8
-            END
-    """
-    
-    cur.execute(price_query)
+    # Get price distribution using stored procedure
+    cur.execute("CALL get_price_distribution()")
     price_results_raw = cur.fetchall()
     cur.close()
     con.close()

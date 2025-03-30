@@ -3,29 +3,28 @@
 import streamlit as st
 import datetime
 from database.db_setup import get_connection
+from database.orm_models import get_session, User, Item
 import base64
 from PIL import Image
 import io
+from decimal import Decimal
 
 def get_user_info(user_id):
-    """Get the user information for the current user"""
-    con = get_connection()
-    cur = con.cursor(dictionary=True)
-    cur.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
-    user_data = cur.fetchone()
-    cur.close()
-    con.close()
-    return user_data
+    """Get the user information for the current user using ORM"""
+    session = get_session()
+    user = session.query(User).filter(User.user_id == user_id).first()
+    session.close()
+    return user
 
 def update_user_contact(user_id, email, phone):
-    """Update the user's contact information if changed"""
-    con = get_connection()
-    cur = con.cursor()
-    cur.execute("UPDATE users SET email = %s, phone = %s WHERE user_id = %s", 
-               (email, phone, user_id))
-    con.commit()
-    cur.close()
-    con.close()
+    """Update the user's contact information if changed using ORM"""
+    session = get_session()
+    user = session.query(User).filter(User.user_id == user_id).first()
+    if user:
+        user.email = email
+        user.phone = phone
+        session.commit()
+    session.close()
 
 def create_item_page():
     st.title("Create a New Item")
@@ -34,7 +33,7 @@ def create_item_page():
     # Hardcode seller_id=1 for now or handle user login in a future step.
     seller_id = 1
     
-    # Get current user data
+    # Get current user data using ORM
     user_data = get_user_info(seller_id)
     
     # Create two columns for the form
@@ -43,8 +42,8 @@ def create_item_page():
     with col1:
         # Seller information section
         st.subheader("Your Contact Information")
-        seller_email = st.text_input("Email Address", value=user_data.get('email', ''))
-        seller_phone = st.text_input("Phone Number", value=user_data.get('phone', ''))
+        seller_email = st.text_input("Email Address", value=user_data.email if user_data and user_data.email else '')
+        seller_phone = st.text_input("Phone Number", value=user_data.phone if user_data and user_data.phone else '')
         
         # Update user contact info if provided
         if seller_email or seller_phone:
@@ -104,39 +103,31 @@ def create_item_page():
                 elif contact_preference == "Phone" and not seller_phone:
                     st.error("You selected Phone as your preferred contact method but didn't provide a phone number.")
                 else:
-                    # Insert into database
+                    # Insert into database using SQLAlchemy ORM
                     try:
-                        con = get_connection()
-                        cur = con.cursor()
+                        # Create a new Item object
+                        new_item = Item(
+                            title=title,
+                            description=description,
+                            price=Decimal(price),
+                            condition_status=condition_status,
+                            seller_id=seller_id,
+                            category=category,
+                            contact_preference=contact_preference,
+                            location=location,
+                            created_at=datetime.datetime.now(),
+                            image_data=image_data
+                        )
                         
-                        # First, create a more detailed query that includes all our new fields
-                        insert_query = """
-                            INSERT INTO items 
-                            (title, description, price, condition_status, seller_id, category, 
-                             contact_preference, location, created_at, image_data) 
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """
-                        
-                        # Execute with all our parameters
-                        cur.execute(insert_query, (
-                            title, 
-                            description, 
-                            price, 
-                            condition_status, 
-                            seller_id,
-                            category,
-                            contact_preference,
-                            location,
-                            datetime.datetime.now(),
-                            image_data
-                        ))
+                        # Add to database
+                        session = get_session()
+                        session.add(new_item)
+                        session.commit()
                         
                         # Get the ID of the newly created item
-                        item_id = cur.lastrowid
+                        item_id = new_item.item_id
                         
-                        con.commit()
-                        cur.close()
-                        con.close()
+                        session.close()
                         
                         st.success(f"Item '{title}' created successfully!")
                         

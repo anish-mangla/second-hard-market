@@ -6,9 +6,13 @@ import io
 from PIL import Image
 import base64
 import datetime
+from database.create_procedures import create_procedures
 
 def view_items_page():
     st.title("Browse Items")
+    
+    # Ensure stored procedures exist
+    create_procedures()
     
     # Check if we have a specific item_id in query params
     query_params = st.query_params
@@ -58,50 +62,9 @@ def view_items_page():
     date_options = ["Any time", "Today", "This week", "This month"]
     selected_date_filter = st.sidebar.radio("Show items from:", date_options)
     
-    # Build the query based on filters
-    query = "SELECT i.*, u.username, u.email FROM items i LEFT JOIN users u ON i.seller_id = u.user_id WHERE 1=1"
-    params = []
-    
-    # Category filter
-    if selected_category != "All Categories":
-        query += " AND i.category = %s"
-        params.append(selected_category)
-    
-    # Price range filter
-    query += " AND i.price BETWEEN %s AND %s"
-    params.extend([price_range[0], price_range[1]])
-    
-    # Condition filter
-    if selected_condition != "All Conditions":
-        query += " AND i.condition_status = %s"
-        params.append(selected_condition)
-    
-    # Date filter
-    if selected_date_filter != "Any time":
-        today = datetime.datetime.now().date()
-        if selected_date_filter == "Today":
-            query += " AND DATE(i.created_at) = %s"
-            params.append(today)
-        elif selected_date_filter == "This week":
-            # Calculate start of week (Sunday or Monday depending on your preference)
-            start_of_week = today - datetime.timedelta(days=today.weekday())
-            query += " AND i.created_at >= %s"
-            params.append(start_of_week)
-        elif selected_date_filter == "This month":
-            start_of_month = datetime.datetime(today.year, today.month, 1)
-            query += " AND i.created_at >= %s"
-            params.append(start_of_month)
-    
-    # Search query
-    if search_query:
-        query += " AND (i.title LIKE %s OR i.description LIKE %s)"
-        search_param = f"%{search_query}%"
-        params.extend([search_param, search_param])
-    
-    # If specific item_id is provided, filter just for that item
-    if specific_item_id:
-        query += " AND i.item_id = %s"
-        params.append(specific_item_id)
+    # Add status filter
+    status_options = ["All", "Available", "Pending", "Sold"]
+    selected_status = st.sidebar.selectbox("Status", status_options, index=0)
     
     # Add sorting options in the main area
     sort_col1, sort_col2, sort_col3 = st.columns([2, 2, 1])
@@ -125,47 +88,137 @@ def view_items_page():
             horizontal=True
         )
     
-    # Complete the query with sorting
-    query += f" ORDER BY {sort_options[selected_sort]}"
+    # Build the query based on filters
+    params = []
+    items = []
+    total_items = 0
     
-    # Pagination
-    items_per_page = 8 if view_type == "List" else 6
-    
-    # Get total count first
-    count_con = get_connection()
-    count_cur = count_con.cursor()
-    # Create a COUNT query based on the same WHERE clause
-    count_query = query.replace("SELECT i.*, u.username, u.email", "SELECT COUNT(*)")
-    count_query = count_query.split("ORDER BY")[0]  # Remove ORDER BY clause for count
-    
-    count_cur.execute(count_query, params)
-    total_items = count_cur.fetchone()[0]
-    count_cur.close()
-    count_con.close()
-    
-    # Calculate pagination
-    total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
-    
-    with sort_col3:
-        # Add 1 to make it 1-indexed for users
-        current_page = st.number_input("Page", min_value=1, max_value=total_pages, value=1)
-    
-    # Adjust query for pagination
-    current_page = int(current_page)  # Ensure it's an integer
-    offset = (current_page - 1) * items_per_page
-    query += f" LIMIT {items_per_page} OFFSET {offset}"
+    # If there's a specific item ID, we use a direct query instead of stored procedure
+    if specific_item_id:
+        query = "SELECT i.*, u.username, u.email FROM items i LEFT JOIN users u ON i.seller_id = u.user_id WHERE i.item_id = %s"
+        params = [specific_item_id]
+        
+        con = get_connection()
+        cur = con.cursor(dictionary=True)
+        cur.execute(query, params)
+        items = cur.fetchall()
+        total_items = len(items)
+        cur.close()
+        con.close()
+    else:
+        # Using stored procedure for basic filtering
+        if selected_category == "All Categories":
+            category_param = None
+        else:
+            category_param = selected_category
+            
+        status_param = None if selected_status == "All" else selected_status
+        
+        # Get filtered items using stored procedure
+        con = get_connection()
+        cur = con.cursor(dictionary=True)
+        
+        # Date filter
+        date_filter_query = ""
+        date_params = []
+        
+        if selected_date_filter != "Any time":
+            today = datetime.datetime.now().date()
+            if selected_date_filter == "Today":
+                date_filter_query = " AND DATE(i.created_at) = %s"
+                date_params = [today]
+            elif selected_date_filter == "This week":
+                # Calculate start of week (Sunday or Monday depending on your preference)
+                start_of_week = today - datetime.timedelta(days=today.weekday())
+                date_filter_query = " AND i.created_at >= %s"
+                date_params = [start_of_week]
+            elif selected_date_filter == "This month":
+                start_of_month = datetime.datetime(today.year, today.month, 1)
+                date_filter_query = " AND i.created_at >= %s"
+                date_params = [start_of_month]
+        
+        # Search query
+        search_filter = ""
+        search_params = []
+        
+        if search_query:
+            search_filter = " AND (i.title LIKE %s OR i.description LIKE %s)"
+            search_param = f"%{search_query}%"
+            search_params = [search_param, search_param]
+        
+        # Call stored procedure for basic filtering
+        if not date_filter_query and not search_filter:
+            # We can use the stored procedure directly
+            cur.execute(
+                "CALL get_items_by_filter(%s, %s, %s, %s, %s)", 
+                [category_param, price_range[0], price_range[1], selected_condition, status_param]
+            )
+            items = cur.fetchall()
+            
+            # Count items (reopen cursor since stored procedure closes it)
+            total_items = len(items)
+        else:
+            # Need to use standard query to combine with search and date filters
+            query = """
+                SELECT i.*, u.username, u.email 
+                FROM items i 
+                LEFT JOIN users u ON i.seller_id = u.user_id 
+                WHERE 1=1
+                    AND (i.category = %s OR %s IS NULL OR %s = 'All Categories')
+                    AND (i.price BETWEEN %s AND %s)
+                    AND (i.condition_status = %s OR %s IS NULL OR %s = 'All Conditions')
+                    AND (i.status = %s OR %s IS NULL OR %s = 'All')
+            """
+            params = [
+                category_param, category_param, category_param,
+                price_range[0], price_range[1],
+                selected_condition, selected_condition, selected_condition,
+                status_param, status_param, status_param
+            ]
+            
+            # Add date filter if needed
+            if date_filter_query:
+                query += date_filter_query
+                params.extend(date_params)
+                
+            # Add search filter if needed
+            if search_filter:
+                query += search_filter
+                params.extend(search_params)
+                
+            # Add sorting
+            query += f" ORDER BY {sort_options[selected_sort]}"
+            
+            # Get count first
+            count_query = query.replace("i.*, u.username, u.email", "COUNT(*)")
+            count_query = count_query.split("ORDER BY")[0]
+            
+            cur.execute(count_query, params)
+            total_items = cur.fetchone()['COUNT(*)']
+            
+            # Pagination
+            items_per_page = 8 if view_type == "List" else 6
+            total_pages = max(1, (total_items + items_per_page - 1) // items_per_page)
+            
+            with sort_col3:
+                # Add 1 to make it 1-indexed for users
+                current_page = st.number_input("Page", min_value=1, max_value=total_pages, value=1)
+            
+            # Adjust query for pagination
+            current_page = int(current_page)  # Ensure it's an integer
+            offset = (current_page - 1) * items_per_page
+            query += f" LIMIT {items_per_page} OFFSET {offset}"
+            
+            # Execute query with pagination
+            cur.execute(query, params)
+            items = cur.fetchall()
+        
+        cur.close()
+        con.close()
     
     # Display item count
-    st.markdown(f"**Showing {min(items_per_page, total_items - offset)} of {total_items} items**")
+    st.markdown(f"**Showing {len(items)} of {total_items} items**")
     
-    # Fetch items with pagination
-    con = get_connection()
-    cur = con.cursor(dictionary=True)
-    cur.execute(query, params)
-    items = cur.fetchall()
-    cur.close()
-    con.close()
-
     if not items:
         st.info("No items found matching your criteria.")
         return
@@ -233,27 +286,28 @@ def view_items_page():
             with st.expander(f"{row['title']} (${float(row['price']):.2f}) - {row['username']}"):
                 display_item_details(row)
 
-    # Pagination controls
-    pagination_cols = st.columns([1, 2, 1])
-    with pagination_cols[1]:
-        col1, col2, col3 = st.columns([1, 1, 1])
-        
-        with col1:
-            if current_page > 1:
-                if st.button("← Previous"):
-                    # Update query params for the previous page
-                    st.query_params.page = current_page-1
-                    st.rerun()
-        
-        with col2:
-            st.markdown(f"**Page {current_page} of {total_pages}**", unsafe_allow_html=True)
+    # Pagination controls if not specific item
+    if not specific_item_id and 'total_pages' in locals() and total_pages > 1:
+        pagination_cols = st.columns([1, 2, 1])
+        with pagination_cols[1]:
+            col1, col2, col3 = st.columns([1, 1, 1])
             
-        with col3:
-            if current_page < total_pages:
-                if st.button("Next →"):
-                    # Update query params for the next page
-                    st.query_params.page = current_page+1
-                    st.rerun()
+            with col1:
+                if current_page > 1:
+                    if st.button("← Previous"):
+                        # Update query params for the previous page
+                        st.query_params.page = current_page-1
+                        st.rerun()
+            
+            with col2:
+                st.markdown(f"**Page {current_page} of {total_pages}**", unsafe_allow_html=True)
+                
+            with col3:
+                if current_page < total_pages:
+                    if st.button("Next →"):
+                        # Update query params for the next page
+                        st.query_params.page = current_page+1
+                        st.rerun()
 
 def display_item_details(row):
     """Helper function to display full item details"""

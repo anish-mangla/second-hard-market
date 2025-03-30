@@ -8,6 +8,7 @@ import io
 from datetime import datetime, timedelta
 import calendar
 import decimal
+import numpy as np
 from database.transaction_manager import transaction, IsolationLevel
 from database.create_procedures import create_procedures
 from database.orm_models import get_session, Transaction, Item, User, Category
@@ -52,26 +53,30 @@ def reports_page():
     else:  # Custom
         col1, col2 = st.sidebar.columns(2)
         with col1:
-            start_date = st.date_input("From", value=today - timedelta(days=30))
+            start_date = st.date_input("From", value=today - timedelta(days=30), key="sidebar_start")
         with col2:
-            end_date = st.date_input("To", value=today)
+            end_date = st.date_input("To", value=today, key="sidebar_end")
     
     # Format dates for MySQL
     start_date_str = start_date.strftime('%Y-%m-%d') if start_date else None
     end_date_str = end_date.strftime('%Y-%m-%d') if end_date else None
     
-    # Display appropriate date range in the header
+    # Display appropriate date range in the header with styling
     if start_date and end_date:
-        st.subheader(f"Market Analytics: {start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}")
+        st.markdown(f"### 📊 Market Analytics: {start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}")
     else:
-        st.subheader("Market Analytics: All Time")
+        st.markdown("### 📊 Market Analytics: All Time")
+    
+    st.markdown("---")
     
     # Create tabs for different report types
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "Marketplace Overview", 
-        "Category Analysis", 
-        "Price Distribution",
-        "Transaction History"
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "📈 Marketplace Overview", 
+        "🔍 Category Analysis", 
+        "💰 Price Distribution",
+        "🛒 Transaction History",
+        "📅 Seasonal Trends",
+        "👥 User Activity"
     ])
     
     with tab1:
@@ -82,277 +87,87 @@ def reports_page():
     
     with tab3:
         show_price_distribution()
+        show_condition_price_analysis()
         
     with tab4:
         show_transaction_history()
-
-def display_overview_stats():
-    """Display overview statistics about the marketplace using stored procedure"""
-    st.header("Marketplace Overview")
-    
-    # Date range selector for the overview
-    col1, col2 = st.columns(2)
-    with col1:
-        start_date = st.date_input("From date", value=datetime.now() - timedelta(days=30))
-    with col2:
-        end_date = st.date_input("To date", value=datetime.now())
-    
-    # Convert dates to strings for SQL query
-    start_date_str = start_date.strftime('%Y-%m-%d')
-    end_date_str = end_date.strftime('%Y-%m-%d')
-    
-    # Get basic stats using stored procedure
-    con = get_connection()
-    cur = con.cursor(dictionary=True)
-    
-    # Call the stored procedure
-    cur.execute("CALL get_marketplace_stats(%s, %s)", (start_date_str, end_date_str))
-    stats_raw = cur.fetchone()
-    
-    # Need to fetch from next result set (if any)
-    if cur.nextset():
-        pass
-    
-    # Convert all Decimal values to int/float
-    stats = {k: convert_decimal(v) for k, v in stats_raw.items()}
-    
-    # Display metrics in a grid
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    with metric_col1:
-        st.metric("Total Items", stats["total_items"])
-    with metric_col2:
-        st.metric("Available Items", stats["available_items"])
-    with metric_col3:
-        st.metric("Sold Items", stats["sold_items"])
-    with metric_col4:
-        st.metric("Pending Items", stats["pending_items"])
-    
-    # Second row of metrics
-    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
-    with metric_col1:
-        avg_price = stats['avg_price']
-        st.metric("Average Price", f"${avg_price:.2f}" if avg_price is not None else "$0.00")
-    with metric_col2:
-        min_price = stats['min_price']
-        st.metric("Min Price", f"${min_price:.2f}" if min_price is not None else "$0.00")
-    with metric_col3:
-        max_price = stats['max_price']
-        st.metric("Max Price", f"${max_price:.2f}" if max_price is not None else "$0.00")
-    with metric_col4:
-        st.metric("Total Sellers", stats["total_sellers"])
-    
-    # Get weekly items added - using prepared statement for this one
-    weekly_query = f"""
-        SELECT 
-            DATE_FORMAT(created_at, '%Y-%m-%d') AS date,
-            COUNT(*) AS num_items
-        FROM items
-        WHERE created_at BETWEEN %s AND %s
-        GROUP BY DATE_FORMAT(created_at, '%Y-%m-%d')
-        ORDER BY date
-    """
-    
-    cur.execute(weekly_query, (start_date_str, end_date_str + " 23:59:59"))
-    weekly_results_raw = cur.fetchall()
-    cur.close()
-    con.close()
-    
-    # Convert to DataFrame for easier plotting
-    if weekly_results_raw:
-        # Convert any Decimal values in the results
-        weekly_results = []
-        for row in weekly_results_raw:
-            weekly_results.append({k: convert_decimal(v) for k, v in row.items()})
-            
-        weekly_df = pd.DataFrame(weekly_results)
         
-        # Plot weekly items added
-        st.subheader("Items Added per Day")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        ax.bar(weekly_df['date'], weekly_df['num_items'], color='#1f77b4')
-        ax.set_xlabel('Date')
-        ax.set_ylabel('Number of Items')
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        st.pyplot(fig)
-    else:
-        st.info("No data available for the selected date range.")
-
-def display_category_analysis():
-    """Display category-based analysis using stored procedure"""
-    st.header("Category Analysis")
-    
-    # Get category distribution using stored procedure
-    con = get_connection()
-    cur = con.cursor(dictionary=True)
-    
-    # Call the stored procedure
-    cur.execute("CALL get_category_analysis()")
-    category_results_raw = cur.fetchall()
-    cur.close()
-    con.close()
-    
-    if category_results_raw:
-        # Convert any Decimal values in the results
-        category_results = []
-        for row in category_results_raw:
-            category_results.append({k: convert_decimal(v) for k, v in row.items()})
-            
-        # Convert to DataFrame
-        category_df = pd.DataFrame(category_results)
+    with tab5:
+        show_seasonal_trends()
         
-        # Calculate sell-through rate
-        category_df['sell_through_rate'] = (category_df['sold_count'] / category_df['item_count'] * 100).round(1)
-        
-        # Display as a bar chart
-        st.subheader("Items by Category")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        bars = ax.barh(category_df['category'], category_df['item_count'], color='#2ca02c')
-        ax.set_xlabel('Number of Items')
-        ax.set_ylabel('Category')
-        
-        # Add count labels to the bars
-        for i, v in enumerate(category_df['item_count']):
-            ax.text(v + 0.1, i, str(v), va='center')
-            
-        plt.tight_layout()
-        st.pyplot(fig)
-        
-        # Display average price by category
-        st.subheader("Average Price by Category")
-        fig, ax = plt.subplots(figsize=(10, 6))
-        bars = ax.barh(category_df['category'], category_df['avg_price'], color='#d62728')
-        ax.set_xlabel('Average Price ($)')
-        ax.set_ylabel('Category')
-        
-        # Add price labels to the bars
-        for i, v in enumerate(category_df['avg_price']):
-            ax.text(v + 0.1, i, f"${v:.2f}", va='center')
-            
-        plt.tight_layout()
-        st.pyplot(fig)
-        
-        # Display category data as a table
-        st.subheader("Category Statistics")
-        
-        # Format the dataframe for display
-        display_df = category_df.copy()
-        display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${x:.2f}")
-        display_df['sell_through_rate'] = display_df['sell_through_rate'].apply(lambda x: f"{x}%")
-        display_df.columns = ['Category', 'Total Items', 'Average Price', 'Sold Items', 'Sell-Through Rate']
-        
-        st.dataframe(display_df)
-    else:
-        st.info("No category data available.")
-
-def display_price_condition_analysis():
-    """Display price and condition analysis"""
-    st.header("Price & Condition Analysis")
-    
-    # Get condition distribution using prepared statement 
-    con = get_connection()
-    cur = con.cursor(dictionary=True)
-    
-    condition_query = """
-        SELECT 
-            condition_status, 
-            COUNT(*) AS item_count,
-            AVG(price) AS avg_price
-        FROM items
-        WHERE condition_status IS NOT NULL
-        GROUP BY condition_status
-        ORDER BY 
-            CASE 
-                WHEN condition_status = 'New' THEN 1
-                WHEN condition_status = 'Used - Like New' THEN 2
-                WHEN condition_status = 'Used - Good' THEN 3
-                WHEN condition_status = 'Used - Acceptable' THEN 4
-                WHEN condition_status = 'For parts' THEN 5
-                ELSE 6
-            END
-    """
-    
-    cur.execute(condition_query)
-    condition_results_raw = cur.fetchall()
-    
-    # Get price distribution using stored procedure
-    cur.execute("CALL get_price_distribution()")
-    price_results_raw = cur.fetchall()
-    cur.close()
-    con.close()
-    
-    col1, col2 = st.columns(2)
-    
-    # Condition analysis
-    with col1:
-        if condition_results_raw:
-            # Convert any Decimal values in the results
-            condition_results = []
-            for row in condition_results_raw:
-                condition_results.append({k: convert_decimal(v) for k, v in row.items()})
-                
-            condition_df = pd.DataFrame(condition_results)
-            
-            st.subheader("Items by Condition")
-            fig, ax = plt.subplots(figsize=(8, 5))
-            plt.pie(condition_df['item_count'], labels=condition_df['condition_status'], autopct='%1.1f%%', startangle=90)
-            plt.axis('equal')
-            plt.tight_layout()
-            st.pyplot(fig)
-            
-            # Table of condition data
-            st.markdown("##### Condition Statistics")
-            condition_display_df = condition_df.copy()
-            condition_display_df['avg_price'] = condition_display_df['avg_price'].apply(lambda x: f"${x:.2f}")
-            condition_display_df.columns = ['Condition', 'Count', 'Average Price']
-            st.dataframe(condition_display_df)
-    
-    # Price range analysis
-    with col2:
-        if price_results_raw:
-            # Convert any Decimal values in the results
-            price_results = []
-            for row in price_results_raw:
-                price_results.append({k: convert_decimal(v) for k, v in row.items()})
-                
-            price_df = pd.DataFrame(price_results)
-            
-            st.subheader("Items by Price Range")
-            fig, ax = plt.subplots(figsize=(8, 5))
-            plt.pie(price_df['item_count'], labels=price_df['price_range'], autopct='%1.1f%%', startangle=90)
-            plt.axis('equal')
-            plt.tight_layout()
-            st.pyplot(fig)
-            
-            # Table of price range data
-            st.markdown("##### Price Range Distribution")
-            price_df.columns = ['Price Range', 'Count']
-            st.dataframe(price_df)
+    with tab6:
+        show_user_activity()
 
 def show_marketplace_stats(start_date=None, end_date=None):
     """Show overall marketplace statistics"""
     try:
         # Use READ COMMITTED isolation for reports - balance between consistency and performance
         with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
-            st.write("Using transactions with READ COMMITTED isolation level for report generation")
-            
             cursor.execute("CALL get_marketplace_stats(%s, %s)", [start_date, end_date])
             stats = cursor.fetchone()
             
+            # Make sure to consume any additional result sets
+            while cursor.nextset():
+                pass
+            
             if stats:
-                col1, col2, col3, col4 = st.columns(4)
+                st.markdown("### Marketplace Snapshot")
                 
-                with col1:
-                    st.metric("Total Items", int(stats["total_items"]))
+                # Add a style container
+                with st.container():
+                    col1, col2, col3, col4 = st.columns(4)
+                    
+                    with col1:
+                        st.metric("Total Items", int(stats["total_items"]))
+                    
+                    with col2:
+                        st.metric("Available Items", int(stats["available_count"]))
+                    
+                    with col3:
+                        st.metric("Sold Items", int(stats["sold_count"]))
+                    
+                    with col4:
+                        st.metric("Average Price", f"${float(stats['avg_price']):.2f}")
                 
-                with col2:
-                    st.metric("Available Items", int(stats["available_count"]))
-                
-                with col3:
-                    st.metric("Sold Items", int(stats["sold_count"]))
-                
-                with col4:
-                    st.metric("Average Price", f"${float(stats['avg_price']):.2f}")
+                # Additional marketplace statistics if available
+                try:
+                    cursor.execute("""
+                        SELECT 
+                            COUNT(DISTINCT seller_id) as unique_sellers,
+                            COUNT(DISTINCT category_id) as active_categories,
+                            MAX(created_at) as last_listing_date,
+                            (SELECT COUNT(*) FROM items WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) as new_listings_7days
+                        FROM items
+                    """)
+                    
+                    health_stats = cursor.fetchone()
+                    while cursor.nextset():
+                        pass
+                    
+                    if health_stats:
+                        st.markdown("---")
+                        st.markdown("### Marketplace Health")
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("#### Sellers & Categories")
+                            col_a, col_b = st.columns(2)
+                            with col_a:
+                                st.metric("Active Sellers", health_stats["unique_sellers"])
+                            with col_b:
+                                st.metric("Active Categories", health_stats["active_categories"])
+                        
+                        with col2:
+                            st.markdown("#### Listing Activity")
+                            col_a, col_b = st.columns(2)
+                            with col_a:
+                                st.metric("New Listings (7d)", health_stats["new_listings_7days"])
+                            with col_b:
+                                if health_stats["last_listing_date"]:
+                                    st.metric("Last Item Listed", health_stats["last_listing_date"].strftime("%Y-%m-%d"))
+                except Exception as e:
+                    # Silently ignore errors in the additional stats
+                    pass
     except Exception as e:
         st.error(f"Error generating marketplace stats: {str(e)}")
 
@@ -364,93 +179,408 @@ def show_category_analysis(start_date=None, end_date=None):
             cursor.execute("CALL category_analysis(%s, %s)", [start_date, end_date])
             category_data = cursor.fetchall()
             
+            # Make sure to consume any additional result sets
+            while cursor.nextset():
+                pass
+            
             if category_data:
-                # Display as a bar chart and a table
-                category_counts = {row['category'] if row['category'] else 'Uncategorized': row['item_count'] 
-                                for row in category_data}
+                # Create a DataFrame for easier visualization
+                df = pd.DataFrame(category_data)
                 
-                # ... rest of the display code remains unchanged ...
-    except Exception as e:
-        st.error(f"Error generating category analysis: {str(e)}")
-
-def show_complex_statistics():
-    """Show more complex statistics that benefit from SERIALIZABLE isolation"""
-    try:
-        # Use SERIALIZABLE for complex reports that need to be consistent
-        with transaction(IsolationLevel.SERIALIZABLE) as (conn, cursor):
-            st.write("Using SERIALIZABLE isolation for complex statistical analysis")
-            
-            # Get average items per seller
-            cursor.execute("""
-                SELECT 
-                    COUNT(DISTINCT seller_id) as seller_count,
-                    COUNT(*) as item_count,
-                    ROUND(COUNT(*) / COUNT(DISTINCT seller_id), 2) as avg_items_per_seller
-                FROM items
-            """)
-            seller_stats = cursor.fetchone()
-            
-            # Get price distribution
-            cursor.execute("CALL price_distribution()")
-            price_data = cursor.fetchall()
-            
-            # Display the seller statistics
-            if seller_stats:
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Sellers", int(seller_stats["seller_count"]))
-                with col2:
-                    st.metric("Total Items", int(seller_stats["item_count"]))
-                with col3:
-                    st.metric("Avg Items/Seller", float(seller_stats["avg_items_per_seller"]))
-                
-            # Display price distribution
-            if price_data:
-                # ... display code for price distribution ...
-                price_ranges = [row['price_range'] for row in price_data]
-                item_counts = [row['item_count'] for row in price_data]
-                
-                # Create a DataFrame for the chart
-                df = pd.DataFrame({
-                    'Price Range': price_ranges,
-                    'Item Count': item_counts
-                })
-                
-                # Create a bar chart
+                st.markdown("### Category Distribution")
+                # Display as a bar chart 
                 fig, ax = plt.subplots(figsize=(10, 6))
-                bars = ax.bar(price_ranges, item_counts, color='skyblue')
-                ax.set_xlabel('Price Range')
-                ax.set_ylabel('Number of Items')
-                ax.set_title('Price Distribution of Items')
-                ax.tick_params(axis='x', rotation=45)
+                categories = [row['category'] or 'Uncategorized' for row in category_data]
+                item_counts = [row['item_count'] for row in category_data]
                 
-                # Add the count on top of each bar
+                # Use a more attractive color palette
+                colors = plt.cm.Greens(np.linspace(0.5, 0.9, len(categories)))
+                bars = ax.bar(categories, item_counts, color=colors)
+                
+                # Add count labels on top of each bar
                 for bar in bars:
                     height = bar.get_height()
                     ax.annotate(f'{height}',
-                                xy=(bar.get_x() + bar.get_width() / 2, height),
+                                xy=(bar.get_x() + bar.get_width()/2, height),
                                 xytext=(0, 3),  # 3 points vertical offset
                                 textcoords="offset points",
                                 ha='center', va='bottom')
                 
+                ax.set_xlabel('Category')
+                ax.set_ylabel('Number of Items')
+                ax.set_title('Items by Category')
+                ax.tick_params(axis='x', rotation=45)
+                plt.tight_layout()
+                
+                st.pyplot(fig)
+                
+                # Try to add a pie chart if there are not too many categories
+                if len(categories) <= 10:
+                    st.markdown("### Category Proportions")
+                    fig, ax = plt.subplots(figsize=(8, 8))
+                    ax.pie(item_counts, labels=categories, autopct='%1.1f%%', 
+                           startangle=90, shadow=True, 
+                           colors=plt.cm.Paired(np.linspace(0, 1, len(categories))))
+                    ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
+                    plt.title("Category Distribution", fontsize=16)
+                    st.pyplot(fig)
+                
+                # Display detailed metrics as a table
+                st.markdown("### Category Details")
+                display_df = df.copy()
+                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x):.2f}")
+                display_df = display_df.rename(columns={
+                    'category': 'Category',
+                    'item_count': 'Total Items',
+                    'avg_price': 'Average Price',
+                    'sold_count': 'Sold Items'
+                })
+                st.dataframe(display_df, use_container_width=True)
+            else:
+                st.info("No category data available to analyze.")
+    except Exception as e:
+        st.error(f"Error generating category analysis: {str(e)}")
+
+def show_price_distribution():
+    """Show price distribution of items"""
+    st.markdown("### 💲 Price Distribution")
+    
+    try:
+        # Use READ COMMITTED isolation for reports
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            # Call the stored procedure for price distribution
+            cursor.execute("CALL price_distribution()")
+            price_data = cursor.fetchall()
+            
+            # Make sure to consume any additional result sets
+            while cursor.nextset():
+                pass
+            
+            if not price_data:
+                st.info("No price data available to analyze.")
+                return
+                
+            # Create a pandas DataFrame for the visualization
+            price_ranges = [row['price_range'] for row in price_data]
+            item_counts = [row['item_count'] for row in price_data]
+            
+            df = pd.DataFrame({
+                'Price Range': price_ranges,
+                'Item Count': item_counts
+            })
+            
+            # Create and display the bar chart
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = plt.cm.Blues(np.linspace(0.5, 0.9, len(price_ranges)))
+            bars = ax.bar(price_ranges, item_counts, color=colors)
+            
+            # Add count labels on top of each bar
+            for bar in bars:
+                height = bar.get_height()
+                ax.annotate(f'{height}',
+                            xy=(bar.get_x() + bar.get_width()/2, height),
+                            xytext=(0, 3),  # 3 points vertical offset
+                            textcoords="offset points",
+                            ha='center', va='bottom')
+            
+            ax.set_xlabel('Price Range')
+            ax.set_ylabel('Number of Items')
+            ax.set_title('Price Distribution of Items')
+            ax.tick_params(axis='x', rotation=45)
+            plt.tight_layout()
+            
+            st.pyplot(fig)
+            
+            # Also display as a table
+            st.dataframe(df, use_container_width=True)
+    except Exception as e:
+        st.error(f"Error generating price distribution: {str(e)}")
+
+def show_condition_price_analysis():
+    """Show relationship between item condition and price"""
+    st.markdown("### 👍 Price by Condition Analysis")
+    
+    try:
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            # Get price data by condition
+            cursor.execute("""
+                SELECT 
+                    condition_status,
+                    ROUND(AVG(price), 2) as avg_price,
+                    MIN(price) as min_price,
+                    MAX(price) as max_price,
+                    COUNT(*) as item_count
+                FROM items
+                GROUP BY condition_status
+                ORDER BY 
+                    CASE 
+                        WHEN condition_status = 'New' THEN 1
+                        WHEN condition_status = 'Like New' THEN 2
+                        WHEN condition_status = 'Good' THEN 3
+                        WHEN condition_status = 'Fair' THEN 4
+                        WHEN condition_status = 'Poor' THEN 5
+                        ELSE 6
+                    END
+            """)
+            
+            condition_data = cursor.fetchall()
+            while cursor.nextset():
+                pass
+                
+            if condition_data:
+                # Create DataFrame
+                condition_df = pd.DataFrame(condition_data)
+                
+                # Display condition data as a table
+                st.markdown("#### Condition Price Summary")
+                display_df = condition_df.copy()
+                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x):.2f}")
+                display_df['min_price'] = display_df['min_price'].apply(lambda x: f"${float(x):.2f}")
+                display_df['max_price'] = display_df['max_price'].apply(lambda x: f"${float(x):.2f}")
+                
+                display_df = display_df.rename(columns={
+                    'condition_status': 'Condition',
+                    'avg_price': 'Average Price',
+                    'min_price': 'Minimum Price',
+                    'max_price': 'Maximum Price',
+                    'item_count': 'Item Count'
+                })
+                
+                st.dataframe(display_df, use_container_width=True)
+                
+                # Create a bar chart of average prices by condition
+                fig, ax = plt.subplots(figsize=(10, 6))
+                conditions = [row['condition_status'] for row in condition_data]
+                avg_prices = [float(row['avg_price']) for row in condition_data]
+                
+                # Use a color gradient based on condition (green for new, yellow for good, etc)
+                condition_colors = {
+                    'New': '#2ecc71',       # Green
+                    'Like New': '#27ae60',  # Darker green
+                    'Good': '#f1c40f',      # Yellow
+                    'Fair': '#e67e22',      # Orange
+                    'Poor': '#e74c3c'       # Red
+                }
+                
+                colors = [condition_colors.get(condition, '#3498db') for condition in conditions]
+                bars = ax.bar(conditions, avg_prices, color=colors)
+                
+                # Add average price labels on top of each bar
+                for bar in bars:
+                    height = bar.get_height()
+                    ax.annotate(f'${height:.2f}',
+                                xy=(bar.get_x() + bar.get_width()/2, height),
+                                xytext=(0, 3),  # 3 points vertical offset
+                                textcoords="offset points",
+                                ha='center', va='bottom')
+                
+                ax.set_xlabel('Condition')
+                ax.set_ylabel('Average Price ($)')
+                ax.set_title('Average Price by Item Condition')
+                ax.grid(axis='y', linestyle='--', alpha=0.7)
+                
+                st.pyplot(fig)
+            else:
+                st.info("No condition data available to analyze.")
+    except Exception as e:
+        st.error(f"Error generating condition price analysis: {str(e)}")
+
+def show_seasonal_trends():
+    """Show seasonal trends in the marketplace"""
+    st.markdown("### 📅 Seasonal Marketplace Trends")
+    
+    try:
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            # Get monthly item count data
+            cursor.execute("""
+                SELECT 
+                    DATE_FORMAT(created_at, '%Y-%m') as month,
+                    COUNT(*) as item_count,
+                    ROUND(AVG(price), 2) as avg_price,
+                    SUM(CASE WHEN status = 'Sold' THEN 1 ELSE 0 END) as sold_count
+                FROM items
+                WHERE created_at >= DATE_SUB(NOW(), INTERVAL 12 MONTH)
+                GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+                ORDER BY month
+            """)
+            
+            monthly_data = cursor.fetchall()
+            while cursor.nextset():
+                pass
+            
+            if not monthly_data or len(monthly_data) < 2:
+                st.info("Not enough data available for trend analysis. Need at least 2 months of data.")
+                return
+                
+            # Create DataFrames for visualization
+            months = [row['month'] for row in monthly_data]
+            item_counts = [row['item_count'] for row in monthly_data]
+            avg_prices = [float(row['avg_price']) for row in monthly_data]
+            sold_counts = [row['sold_count'] for row in monthly_data]
+            
+            # Format month labels for better display
+            formatted_months = []
+            for month_str in months:
+                year, month = month_str.split('-')
+                month_name = calendar.month_abbr[int(month)]
+                formatted_months.append(f"{month_name} {year}")
+            
+            st.markdown("#### 📊 Monthly Listing & Sales Trends")
+            # Create line chart for monthly listings and sales
+            fig, ax1 = plt.subplots(figsize=(10, 6))
+            
+            color = '#3498db'  # Blue
+            ax1.set_xlabel('Month')
+            ax1.set_ylabel('Total Items', color=color)
+            line1 = ax1.plot(formatted_months, item_counts, color=color, marker='o', label='New Listings', linewidth=3)
+            ax1.tick_params(axis='y', labelcolor=color)
+            ax1.tick_params(axis='x', rotation=45)
+            ax1.grid(axis='y', linestyle='--', alpha=0.3)
+            
+            # Create second y-axis
+            ax2 = ax1.twinx()
+            color = '#2ecc71'  # Green
+            ax2.set_ylabel('Sold Items', color=color)
+            line2 = ax2.plot(formatted_months, sold_counts, color=color, marker='s', label='Sold Items', linewidth=3)
+            ax2.tick_params(axis='y', labelcolor=color)
+            
+            # Combine legends
+            lines = line1 + line2
+            labels = [l.get_label() for l in lines]
+            ax1.legend(lines, labels, loc='upper left')
+            
+            plt.title('Monthly Listing and Sales Trends')
+            plt.tight_layout()
+            st.pyplot(fig)
+            
+            st.markdown("#### 💰 Price Trend Analysis")
+            # Create price trend chart
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(formatted_months, avg_prices, marker='o', color='#9b59b6', linewidth=3)  # Purple
+            
+            # Add price labels
+            for i, price in enumerate(avg_prices):
+                ax.annotate(f'${price:.2f}', 
+                           (i, price),
+                           textcoords="offset points",
+                           xytext=(0,10), 
+                           ha='center')
+            
+            ax.set_xlabel('Month')
+            ax.set_ylabel('Average Price ($)')
+            ax.set_title('Monthly Average Price Trend')
+            ax.tick_params(axis='x', rotation=45)
+            ax.grid(True, linestyle='--', alpha=0.7)
+            
+            plt.tight_layout()
+            st.pyplot(fig)
+    except Exception as e:
+        st.error(f"Error generating seasonal trends: {str(e)}")
+
+def show_user_activity():
+    """Show user activity statistics"""
+    st.markdown("### 👥 User Activity Analytics")
+    
+    try:
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            # Get seller activity data
+            cursor.execute("""
+                SELECT 
+                    u.username,
+                    COUNT(i.item_id) as item_count,
+                    SUM(CASE WHEN i.status = 'Sold' THEN 1 ELSE 0 END) as sold_count,
+                    ROUND(AVG(i.price), 2) as avg_price,
+                    MIN(i.created_at) as first_listing,
+                    MAX(i.created_at) as last_listing
+                FROM users u
+                LEFT JOIN items i ON u.user_id = i.seller_id
+                GROUP BY u.user_id
+                HAVING item_count > 0
+                ORDER BY item_count DESC
+            """)
+            
+            seller_data = cursor.fetchall()
+            while cursor.nextset():
+                pass
+                
+            if seller_data:
+                # Create DataFrame for visualization
+                df_sellers = pd.DataFrame(seller_data)
+                
+                # Show top sellers
+                st.markdown("#### 🏆 Top Sellers")
+                
+                # Create bar chart for top sellers
+                fig, ax = plt.subplots(figsize=(10, 6))
+                
+                # Limit to top 10 sellers for visualization
+                top_sellers = df_sellers.head(10) if len(df_sellers) > 10 else df_sellers
+                
+                usernames = [row['username'] for row in top_sellers.to_dict('records')]
+                item_counts = [row['item_count'] for row in top_sellers.to_dict('records')]
+                sold_counts = [row['sold_count'] for row in top_sellers.to_dict('records')]
+                
+                # Create grouped bar chart
+                x = np.arange(len(usernames))
+                width = 0.35
+                
+                ax.bar(x - width/2, item_counts, width, label='Listed Items', color='#3498db')  # Blue
+                ax.bar(x + width/2, sold_counts, width, label='Sold Items', color='#2ecc71')  # Green
+                
+                ax.set_xlabel('Seller')
+                ax.set_ylabel('Number of Items')
+                ax.set_title('Top Sellers Activity')
+                ax.set_xticks(x)
+                ax.set_xticklabels(usernames, rotation=45, ha='right')
+                ax.legend()
+                ax.grid(axis='y', linestyle='--', alpha=0.3)
+                
                 plt.tight_layout()
                 st.pyplot(fig)
                 
-                # Also show as a table
-                st.dataframe(df)
+                # Show seller stats table
+                st.markdown("#### 📋 Seller Details")
+                display_df = df_sellers.copy()
+                display_df['avg_price'] = display_df['avg_price'].apply(lambda x: f"${float(x):.2f}")
+                if 'first_listing' in display_df.columns and display_df['first_listing'].dtype != 'object':
+                    display_df['first_listing'] = pd.to_datetime(display_df['first_listing']).dt.strftime('%Y-%m-%d')
+                if 'last_listing' in display_df.columns and display_df['last_listing'].dtype != 'object':
+                    display_df['last_listing'] = pd.to_datetime(display_df['last_listing']).dt.strftime('%Y-%m-%d')
+                
+                display_df = display_df.rename(columns={
+                    'username': 'Seller',
+                    'item_count': 'Total Listings',
+                    'sold_count': 'Items Sold',
+                    'avg_price': 'Average Price',
+                    'first_listing': 'First Listing',
+                    'last_listing': 'Last Listing'
+                })
+                
+                st.dataframe(display_df, use_container_width=True)
+                
+                # Calculate sell-through rate
+                st.markdown("#### 📈 Seller Performance Metrics")
+                
+                display_df['Sell-through Rate'] = (display_df['Items Sold'] / display_df['Total Listings'] * 100).apply(lambda x: f"{x:.1f}%")
+                
+                # Only show performance metrics
+                performance_cols = ['Seller', 'Total Listings', 'Items Sold', 'Sell-through Rate', 'Average Price']
+                st.dataframe(display_df[performance_cols], use_container_width=True)
+            else:
+                st.info("No seller activity data available.")
     except Exception as e:
-        st.error(f"Error generating complex statistics: {str(e)}")
+        st.error(f"Error generating user activity analytics: {str(e)}")
 
 def show_transaction_history():
     """Show transaction history and analytics"""
-    st.subheader("Transaction History")
+    st.markdown("### 🛒 Transaction History")
     
     # Date range selector for transactions
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("From", value=datetime.now().date() - timedelta(days=30))
+        start_date = st.date_input("From", value=datetime.now().date() - timedelta(days=30), key="trans_start_date")
     with col2:
-        end_date = st.date_input("To", value=datetime.now().date())
+        end_date = st.date_input("To", value=datetime.now().date(), key="trans_end_date")
     
     # User filter (seller or buyer)
     filter_type = st.radio("Filter by:", ["All Transactions", "As Seller", "As Buyer"], horizontal=True)
@@ -472,6 +602,10 @@ def show_transaction_history():
             )
             transactions = cursor.fetchall()
             
+            # Make sure to consume any additional result sets
+            while cursor.nextset():
+                pass
+            
             if not transactions:
                 st.info("No transactions found for the selected period.")
                 return
@@ -484,7 +618,8 @@ def show_transaction_history():
             total_value = sum(float(t['price']) for t in transactions)
             avg_price = total_value / total_transactions if total_transactions > 0 else 0
             
-            # Display summary metrics
+            # Display summary metrics with colored containers
+            st.markdown("#### Transaction Summary")
             metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
             with metrics_col1:
                 st.metric("Total Transactions", total_transactions)
@@ -494,7 +629,7 @@ def show_transaction_history():
                 st.metric("Average Price", f"${avg_price:.2f}")
             
             # Transaction list with details
-            st.subheader("Transaction Details")
+            st.markdown("#### Transaction Details")
             
             # Format the DataFrame for display
             if 'transaction_date' in df.columns:

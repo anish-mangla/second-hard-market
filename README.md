@@ -90,12 +90,21 @@ This balanced approach demonstrates different database access methodologies and 
 The database design follows this simplified ER diagram:
 
 ```
-+-------+       +--------+
-| USERS |---<---| ITEMS  |
-+-------+       +--------+
++--------+       +-----------+       +------------+
+| Users  |------>| Items     |<------| Categories |
++--------+       +-----------+       +------------+
+    |                 |                     ^
+    |                 |                     |
+    v                 v                     |
++---------------------|-----+               |
+| Transactions        |     |---------------+
++----------------------+
 ```
 
 - A one-to-many relationship exists between Users and Items (one user can sell many items)
+- A one-to-many relationship exists between Categories and Items (one category can contain many items)
+- A self-referential relationship exists between Categories (categories can have parent-child relationships)
+- A many-to-many relationship exists between Users and Items via Transactions (users can buy many items, and items can be bought by one user)
 
 ### Database Schema
 
@@ -121,6 +130,29 @@ CREATE TABLE users (
 | phone | VARCHAR(50) | User's phone number | Optional |
 | password_hash | VARCHAR(255) | Hashed user password | Optional (for future auth implementation) |
 
+#### Categories Table
+
+The `categories` table stores information about listed categories:
+
+```sql
+CREATE TABLE categories (
+    category_id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    parent_category_id INT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (parent_category_id) REFERENCES categories(category_id)
+);
+```
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| category_id | INT | Unique identifier for each category | PRIMARY KEY, AUTO_INCREMENT |
+| name | VARCHAR(100) | Category name | NOT NULL |
+| description | TEXT | Category description | Optional |
+| parent_category_id | INT | Reference to parent category | FOREIGN KEY, Optional |
+| created_at | DATETIME | When the category was created | DEFAULT CURRENT_TIMESTAMP |
+
 #### Items Table
 
 The `items` table stores information about listed items:
@@ -135,11 +167,12 @@ CREATE TABLE items (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     status VARCHAR(50) DEFAULT 'Available',
     seller_id INT,
-    category VARCHAR(100),
+    category_id INT,
     contact_preference VARCHAR(50),
     location VARCHAR(255),
     image_data LONGBLOB,
-    FOREIGN KEY (seller_id) REFERENCES users(user_id)
+    FOREIGN KEY (seller_id) REFERENCES users(user_id),
+    FOREIGN KEY (category_id) REFERENCES categories(category_id)
 );
 ```
 
@@ -153,10 +186,40 @@ CREATE TABLE items (
 | created_at | DATETIME | When the item was listed | DEFAULT CURRENT_TIMESTAMP |
 | status | VARCHAR(50) | Current status (Available, Pending, Sold) | DEFAULT 'Available' |
 | seller_id | INT | Reference to the user selling the item | FOREIGN KEY |
-| category | VARCHAR(100) | Item category | Optional |
+| category_id | INT | Reference to the item's category | FOREIGN KEY |
 | contact_preference | VARCHAR(50) | Seller's preferred contact method | Optional |
 | location | VARCHAR(255) | Item pickup/sale location | Optional |
 | image_data | LONGBLOB | Binary data for item image | Optional |
+
+#### Transactions Table
+
+The `transactions` table stores information about completed transactions:
+
+```sql
+CREATE TABLE transactions (
+    transaction_id INT AUTO_INCREMENT PRIMARY KEY,
+    item_id INT NOT NULL,
+    seller_id INT NOT NULL,
+    buyer_id INT NOT NULL,
+    transaction_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    price DECIMAL(10, 2) NOT NULL,
+    status VARCHAR(50) DEFAULT 'Completed',
+    payment_method VARCHAR(50),
+    notes TEXT
+);
+```
+
+| Field | Type | Description | Constraints |
+|-------|------|-------------|-------------|
+| transaction_id | INT | Unique identifier for each transaction | PRIMARY KEY, AUTO_INCREMENT |
+| item_id | INT | Reference to the purchased item | FOREIGN KEY, NOT NULL |
+| seller_id | INT | Reference to the item seller | FOREIGN KEY, NOT NULL |
+| buyer_id | INT | Reference to the item buyer | FOREIGN KEY, NOT NULL |
+| transaction_date | DATETIME | When the transaction occurred | DEFAULT CURRENT_TIMESTAMP |
+| price | DECIMAL(10, 2) | Final transaction price | NOT NULL |
+| status | VARCHAR(50) | Transaction status | DEFAULT 'Completed' |
+| payment_method | VARCHAR(50) | Method of payment | Optional |
+| notes | TEXT | Additional transaction notes | Optional |
 
 ### Normalization
 
@@ -175,6 +238,10 @@ The database schema follows these normalization principles:
    - No transitive dependencies
    - All non-key attributes depend directly on the primary key, not on other non-key attributes
 
+4. **Boyce-Codd Normal Form (BCNF)**:
+   - Every determinant is a candidate key
+   - The categories hierarchy is properly modeled using a self-referential relationship
+
 ### Relationships
 
 The database implements the following relationships:
@@ -184,6 +251,22 @@ The database implements the following relationships:
    - Each item has exactly one seller
    - Implemented via the `seller_id` foreign key in the `items` table
    - Ensures referential integrity (an item can't exist without a valid seller)
+
+2. **One-to-Many: Categories to Items**
+   - One category can contain many items
+   - Each item belongs to exactly one category
+   - Implemented via the `category_id` foreign key in the `items` table
+   - Enables proper classification and filtering of marketplace items
+
+3. **Self-Referential Relationship: Categories to Subcategories**
+   - Categories can have parent-child relationships
+   - Implemented via the `parent_category_id` foreign key in the `categories` table
+   - Enables hierarchical organization of product categories
+
+4. **Many-to-Many: Users to Items via Transactions**
+   - Users can buy many items, and items can be bought by one user
+   - Implemented via the `transactions` table with `seller_id`, `buyer_id` and `item_id` foreign keys
+   - Records the history of completed purchases in the marketplace
 
 ### Schema Evolution
 
@@ -218,6 +301,8 @@ def init_db():
 ### ORM Models
 
 ```python
+from sqlalchemy.orm import sessionmaker, relationship, backref
+
 class User(Base):
     """ORM model for the users table"""
     __tablename__ = 'users'
@@ -327,7 +412,7 @@ new_item = Item(
     price=Decimal(price),
     condition_status=condition_status,
     seller_id=seller_id,
-    category=category,
+    category_id=category_id,
     contact_preference=contact_preference,
     location=location,
     created_at=datetime.now(),

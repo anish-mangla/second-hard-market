@@ -8,6 +8,7 @@ import base64
 import datetime
 from database.create_procedures import create_procedures
 from database.transaction_manager import transaction, IsolationLevel, update_item_status_safely
+from database.orm_models import get_session, Category, Transaction, Item, User
 
 def view_items_page():
     st.title("Browse Items")
@@ -25,11 +26,13 @@ def view_items_page():
     # Sidebar filters section
     st.sidebar.header("Filters")
     
-    # Get all categories from the database
+    # Get all categories from the database - update to use categories table
     con = get_connection()
     cur = con.cursor()
-    cur.execute("SELECT DISTINCT category FROM items WHERE category IS NOT NULL")
-    categories = [cat[0] for cat in cur.fetchall()]
+    cur.execute("SELECT category_id, name FROM categories ORDER BY name")
+    categories_data = cur.fetchall()
+    categories = [cat[1] for cat in categories_data]
+    category_id_map = {cat[1]: cat[0] for cat in categories_data}  # Map names to IDs
     cur.close()
     
     # Filter by category
@@ -38,6 +41,12 @@ def view_items_page():
         ["All Categories"] + categories,
         index=0
     )
+    
+    # Get category_id for the selected category
+    if selected_category != "All Categories":
+        selected_category_id = category_id_map.get(selected_category)
+    else:
+        selected_category_id = None
     
     # Filter by price range
     st.sidebar.subheader("Price Range")
@@ -111,7 +120,7 @@ def view_items_page():
         if selected_category == "All Categories":
             category_param = None
         else:
-            category_param = selected_category
+            category_param = selected_category_id
             
         status_param = None if selected_status == "All" else selected_status
         
@@ -165,7 +174,7 @@ def view_items_page():
                 FROM items i 
                 LEFT JOIN users u ON i.seller_id = u.user_id 
                 WHERE 1=1
-                    AND (i.category = %s OR %s IS NULL OR %s = 'All Categories')
+                    AND (i.category_id = %s OR %s IS NULL OR %s = 0)
                     AND (i.price BETWEEN %s AND %s)
                     AND (i.condition_status = %s OR %s IS NULL OR %s = 'All Conditions')
                     AND (i.status = %s OR %s IS NULL OR %s = 'All')
@@ -436,7 +445,7 @@ def display_item_details(row):
     
     # Actions section
     st.subheader("Actions")
-    col_contact, col_edit, col_delete = st.columns(3)
+    col_contact, col_edit, col_delete, col_purchase = st.columns(4)
     
     with col_contact:
         contact_method = row.get('contact_preference', 'Email')
@@ -455,6 +464,22 @@ def display_item_details(row):
             st.session_state.show_delete_confirmation = True
             st.session_state.item_to_delete = row['item_id']
             st.rerun()
+    
+    with col_purchase:
+        # Only show purchase button if item is available
+        if row['status'] == 'Available':
+            if st.button(f"Purchase Item", key=f"purchase_{row['item_id']}", type="primary"):
+                # Set session state to show purchase confirmation
+                st.session_state.show_purchase_confirmation = True
+                st.session_state.item_to_purchase = {
+                    'item_id': row['item_id'],
+                    'title': row['title'],
+                    'price': row['price'],
+                    'seller_id': row['seller_id']
+                }
+                st.rerun()
+        else:
+            st.info(f"This item is {row['status'].lower()}")
 
 def edit_item_form(item_id):
     """Show form to edit an item"""
@@ -583,6 +608,38 @@ def delete_item(item_id):
         st.error(f"Error deleting item: {str(e)}")
         return False
 
+def purchase_item(item_id, seller_id, price):
+    """Record a purchase transaction when a user buys an item"""
+    try:
+        # Get the buyer ID (using default user ID 1 for simplicity)
+        buyer_id = 1  # In a real app, this would be the logged-in user
+        
+        with transaction(IsolationLevel.SERIALIZABLE) as (conn, cursor):
+            # 1. Check item availability
+            cursor.execute("SELECT status FROM items WHERE item_id = %s FOR UPDATE", (item_id,))
+            item = cursor.fetchone()
+            
+            if not item or item['status'] != 'Available':
+                st.error("This item is no longer available for purchase.")
+                return False
+            
+            # 2. Update item status to Sold
+            cursor.execute("UPDATE items SET status = 'Sold' WHERE item_id = %s", (item_id,))
+            
+            # 3. Create transaction record
+            cursor.execute("""
+                INSERT INTO transactions 
+                (item_id, seller_id, buyer_id, price, payment_method, status)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (item_id, seller_id, buyer_id, price, "Credit Card", "Completed"))
+            
+            transaction_id = cursor.lastrowid
+            
+            return transaction_id
+    except Exception as e:
+        st.error(f"Error processing purchase: {str(e)}")
+        return False
+
 def app():
     # Initialize session state if not exists
     if 'selected_item' not in st.session_state:
@@ -624,6 +681,44 @@ def app():
                         # Clear the confirmation state
                         st.session_state.show_delete_confirmation = False
                         del st.session_state.item_to_delete
+                        # Add a small delay to show the success message
+                        import time
+                        time.sleep(1)
+                        st.rerun()
+        return  # Exit early to not show the main page
+    
+    # Show purchase confirmation if flag is set
+    if 'show_purchase_confirmation' in st.session_state and st.session_state.show_purchase_confirmation:
+        item = st.session_state.item_to_purchase
+        
+        # Create a container for the confirmation dialog to make it prominent
+        with st.container():
+            st.warning(f"💰 Confirm Purchase: {item['title']} for ${float(item['price']):.2f}")
+            st.info("In a real app, this would collect payment information.")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("Cancel Purchase", key="cancel_purchase"):
+                    # Clear the confirmation state and rerun
+                    st.session_state.show_purchase_confirmation = False
+                    del st.session_state.item_to_purchase
+                    st.rerun()
+                    
+            with col2:
+                if st.button("Confirm Purchase", key="confirm_purchase", type="primary"):
+                    # Process the purchase
+                    transaction_id = purchase_item(
+                        item['item_id'], 
+                        item['seller_id'], 
+                        item['price']
+                    )
+                    
+                    if transaction_id:
+                        st.success(f"Purchase successful! Transaction ID: {transaction_id}")
+                        # Clear the confirmation state
+                        st.session_state.show_purchase_confirmation = False
+                        del st.session_state.item_to_purchase
                         # Add a small delay to show the success message
                         import time
                         time.sleep(1)

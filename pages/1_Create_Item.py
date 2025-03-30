@@ -3,7 +3,7 @@
 import streamlit as st
 import datetime
 from database.db_setup import get_connection
-from database.orm_models import get_session, User, Item
+from database.orm_models import get_session, User, Item, Category
 import base64
 from PIL import Image
 import io
@@ -56,12 +56,16 @@ def create_item_page():
             # Basic item information
             title = st.text_input("Title*", help="Give your item a clear, descriptive title")
             
-            # Category selection
-            category = st.selectbox(
-                "Category*", 
-                ["Electronics", "Clothing", "Furniture", "Books", "Sports & Outdoors", 
-                 "Home & Kitchen", "Toys & Games", "Beauty & Health", "Other"]
-            )
+            # Category selection - get options from database
+            session = get_session()
+            categories = session.query(Category).order_by(Category.name).all()
+            category_options = [cat.name for cat in categories]
+            category = st.selectbox("Category", category_options)
+            
+            # Get the category_id for the selected category
+            selected_category = session.query(Category).filter(Category.name == category).first()
+            category_id = selected_category.category_id if selected_category else None
+            session.close()
             
             description = st.text_area("Description*", help="Describe your item, include details about features and condition")
             
@@ -130,7 +134,7 @@ def create_item_page():
                                 price=Decimal(str(price_float)),
                                 condition_status=condition_status,
                                 seller_id=seller_id,
-                                category=category,
+                                category_id=category_id,
                                 contact_preference=contact_preference,
                                 location=location,
                                 image_data=image_data

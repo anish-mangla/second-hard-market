@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import calendar
 import decimal
 from database.transaction_manager import transaction, IsolationLevel
+from database.create_procedures import create_procedures
+from database.orm_models import get_session, Transaction, Item, User, Category
 
 # Helper function to convert Decimal to int/float
 def convert_decimal(value):
@@ -17,27 +19,72 @@ def convert_decimal(value):
     return value
 
 def reports_page():
-    st.title("Marketplace Reports & Analytics")
-    st.write("Get insights into marketplace activity and item statistics.")
-    
-    # Check if stored procedures need to be created
-    st.info("This page uses stored procedures to generate reports efficiently.")
+    """Display various marketplace reports and analytics"""
+    st.title("Marketplace Reports")
     
     # Ensure stored procedures exist
-    from database.create_procedures import create_procedures
     create_procedures()
     
+    # Date range selector for filtering reports
+    st.sidebar.header("Report Filters")
+    
+    # Choose report period
+    report_period = st.sidebar.selectbox(
+        "Report Period",
+        ["Last 7 days", "Last 30 days", "Last 90 days", "All time", "Custom"]
+    )
+    
+    # Calculate date range based on selection
+    today = datetime.now().date()
+    
+    if report_period == "Last 7 days":
+        start_date = today - timedelta(days=7)
+        end_date = today
+    elif report_period == "Last 30 days":
+        start_date = today - timedelta(days=30)
+        end_date = today
+    elif report_period == "Last 90 days":
+        start_date = today - timedelta(days=90)
+        end_date = today
+    elif report_period == "All time":
+        start_date = None
+        end_date = None
+    else:  # Custom
+        col1, col2 = st.sidebar.columns(2)
+        with col1:
+            start_date = st.date_input("From", value=today - timedelta(days=30))
+        with col2:
+            end_date = st.date_input("To", value=today)
+    
+    # Format dates for MySQL
+    start_date_str = start_date.strftime('%Y-%m-%d') if start_date else None
+    end_date_str = end_date.strftime('%Y-%m-%d') if end_date else None
+    
+    # Display appropriate date range in the header
+    if start_date and end_date:
+        st.subheader(f"Market Analytics: {start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}")
+    else:
+        st.subheader("Market Analytics: All Time")
+    
     # Create tabs for different report types
-    tab1, tab2, tab3 = st.tabs(["Overview", "Category Analysis", "Price & Condition Analysis"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "Marketplace Overview", 
+        "Category Analysis", 
+        "Price Distribution",
+        "Transaction History"
+    ])
     
     with tab1:
-        display_overview_stats()
+        show_marketplace_stats(start_date_str, end_date_str)
     
     with tab2:
-        display_category_analysis()
+        show_category_analysis(start_date_str, end_date_str)
     
     with tab3:
-        display_price_condition_analysis()
+        show_price_distribution()
+        
+    with tab4:
+        show_transaction_history()
 
 def display_overview_stats():
     """Display overview statistics about the marketplace using stored procedure"""
@@ -393,6 +440,88 @@ def show_complex_statistics():
                 st.dataframe(df)
     except Exception as e:
         st.error(f"Error generating complex statistics: {str(e)}")
+
+def show_transaction_history():
+    """Show transaction history and analytics"""
+    st.subheader("Transaction History")
+    
+    # Date range selector for transactions
+    col1, col2 = st.columns(2)
+    with col1:
+        start_date = st.date_input("From", value=datetime.now().date() - timedelta(days=30))
+    with col2:
+        end_date = st.date_input("To", value=datetime.now().date())
+    
+    # User filter (seller or buyer)
+    filter_type = st.radio("Filter by:", ["All Transactions", "As Seller", "As Buyer"], horizontal=True)
+    
+    seller_id = None
+    buyer_id = None
+    
+    if filter_type == "As Seller":
+        seller_id = 1  # Default user ID, in a real app this would be the current user
+    elif filter_type == "As Buyer":
+        buyer_id = 1   # Default user ID, in a real app this would be the current user
+    
+    # Get transaction data using stored procedure
+    try:
+        with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
+            cursor.execute(
+                "CALL get_transaction_history(%s, %s, %s, %s)",
+                [start_date, end_date, seller_id, buyer_id]
+            )
+            transactions = cursor.fetchall()
+            
+            if not transactions:
+                st.info("No transactions found for the selected period.")
+                return
+            
+            # Create a DataFrame for easier analysis
+            df = pd.DataFrame(transactions)
+            
+            # Display transaction counts and totals
+            total_transactions = len(df)
+            total_value = sum(float(t['price']) for t in transactions)
+            avg_price = total_value / total_transactions if total_transactions > 0 else 0
+            
+            # Display summary metrics
+            metrics_col1, metrics_col2, metrics_col3 = st.columns(3)
+            with metrics_col1:
+                st.metric("Total Transactions", total_transactions)
+            with metrics_col2:
+                st.metric("Total Value", f"${total_value:.2f}")
+            with metrics_col3:
+                st.metric("Average Price", f"${avg_price:.2f}")
+            
+            # Transaction list with details
+            st.subheader("Transaction Details")
+            
+            # Format the DataFrame for display
+            if 'transaction_date' in df.columns:
+                df['transaction_date'] = pd.to_datetime(df['transaction_date']).dt.strftime('%Y-%m-%d %H:%M')
+            
+            display_cols = ['transaction_id', 'transaction_date', 'item_title', 
+                            'price', 'seller_name', 'buyer_name', 'status', 'payment_method']
+            
+            display_df = df[display_cols].rename(columns={
+                'transaction_id': 'ID',
+                'transaction_date': 'Date',
+                'item_title': 'Item',
+                'price': 'Price',
+                'seller_name': 'Seller',
+                'buyer_name': 'Buyer',
+                'status': 'Status',
+                'payment_method': 'Payment'
+            })
+            
+            # Format the price column
+            display_df['Price'] = display_df['Price'].apply(lambda x: f"${float(x):.2f}")
+            
+            # Display the transactions table
+            st.dataframe(display_df, use_container_width=True)
+    
+    except Exception as e:
+        st.error(f"Error retrieving transaction history: {str(e)}")
 
 def app():
     reports_page()

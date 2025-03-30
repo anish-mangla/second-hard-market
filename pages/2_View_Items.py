@@ -223,19 +223,94 @@ def view_items_page():
         st.info("No items found matching your criteria.")
         return
 
+    # CSS for the cards
+    st.markdown("""
+    <style>
+    .item-card {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 15px;
+        margin-bottom: 20px;
+        background-color: white;
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        overflow: hidden;
+    }
+    .item-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+    }
+    .status-badge {
+        display: inline-block;
+        padding: 3px 8px;
+        border-radius: 12px;
+        font-size: 0.8rem;
+        font-weight: bold;
+        color: white;
+        margin-right: 8px;
+    }
+    .status-available {
+        background-color: #28a745;
+    }
+    .status-pending {
+        background-color: #ffc107;
+        color: #212529;
+    }
+    .status-sold {
+        background-color: #dc3545;
+    }
+    .price-tag {
+        font-size: 1.3rem;
+        font-weight: bold;
+        color: #1E5C37;
+    }
+    .condition-tag {
+        font-size: 0.85rem;
+        color: #666;
+        margin-bottom: 8px;
+    }
+    .item-title {
+        margin-top: 5px;
+        margin-bottom: 10px;
+        font-size: 1.2rem;
+        font-weight: bold;
+        color: #333;
+    }
+    .item-description {
+        color: #555;
+        font-size: 0.9rem;
+        margin-bottom: 10px;
+    }
+    .meta-info {
+        font-size: 0.8rem;
+        color: #777;
+    }
+    .view-details-btn {
+        margin-top: 10px;
+    }
+    .action-button {
+        border-radius: 20px;
+        padding: 5px 10px;
+        font-size: 0.9rem;
+        border: none;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     # Display items based on view type
     if view_type == "Grid":
-        # Grid view (2 columns instead of 3 to make cards wider)
+        # Grid view (2 columns)
         cols = st.columns(2)
         
         for i, row in enumerate(items):
             with cols[i % 2]:
                 with st.container():
-                    # Create a card-like structure with better styling
-                    st.markdown(f"""
-                    <div style="border:1px solid #ddd; border-radius:10px; padding:15px; margin-bottom:20px; background-color:#f9f9f9;">
-                    </div>
-                    """, unsafe_allow_html=True)
+                    # Create a card structure with CSS styling
+                    st.markdown('<div class="item-card">', unsafe_allow_html=True)
+                    
+                    # Status badge
+                    status_class = f"status-{row['status'].lower()}" if row['status'] in ['Available', 'Pending', 'Sold'] else "status-available"
+                    st.markdown(f'<span class="status-badge {status_class}">{row["status"]}</span>', unsafe_allow_html=True)
                     
                     # Display in columns within the card for better layout
                     img_col, info_col = st.columns([1, 1])
@@ -247,43 +322,49 @@ def view_items_page():
                                 image = Image.open(io.BytesIO(row['image_data']))
                                 st.image(image, use_container_width=True)
                             except Exception:
-                                st.warning("Image not available")
+                                st.markdown("📷 Image not available")
+                        else:
+                            st.markdown("📷 No image")
                     
                     with info_col:
-                        # Item title and price
-                        st.markdown(f"### {row['title']}")
-                        st.markdown(f"**${float(row['price']):.2f}**")
+                        # Item title
+                        st.markdown(f'<div class="item-title">{row["title"]}</div>', unsafe_allow_html=True)
                         
-                        # Item metadata - condition and category
-                        st.markdown(f"*{row['condition_status']}* | {row['category'] or 'Uncategorized'}")
+                        # Price tag
+                        st.markdown(f'<div class="price-tag">${float(row["price"]):.2f}</div>', unsafe_allow_html=True)
                         
-                        # Truncated description for grid view
+                        # Condition and category
+                        st.markdown(f'<div class="condition-tag">{row["condition_status"]} | {row["category"] or "Uncategorized"}</div>', unsafe_allow_html=True)
+                        
+                        # Truncated description
                         description = row['description']
                         if len(description) > 80:
                             description = description[:77] + "..."
-                        st.markdown(description)
+                        st.markdown(f'<div class="item-description">{description}</div>', unsafe_allow_html=True)
                     
-                    # Contact info and action buttons in a row
-                    contact_col, detail_col = st.columns(2)
+                    # Footer with seller info and action button
+                    st.markdown(f'<div class="meta-info">📅 Listed: {row["created_at"].strftime("%b %d, %Y")}</div>', unsafe_allow_html=True)
+                    st.markdown(f'<div class="meta-info">👤 Seller: {row["username"]}</div>', unsafe_allow_html=True)
                     
-                    with contact_col:
-                        st.markdown(f"**Seller:** {row['username']}")
-                        if row.get('email'):
-                            st.markdown(f"**Contact:** {row['email']}")
-                    
-                    with detail_col:
-                        # View details button
-                        if st.button(f"View Details", key=f"view_{row['item_id']}"):
-                            st.session_state.selected_item = row['item_id']
+                    # View details button
+                    if st.button(f"View Details", key=f"view_{row['item_id']}", use_container_width=True):
+                        st.session_state.selected_item = row['item_id']
                     
                     # Show item details if selected
                     if hasattr(st.session_state, 'selected_item') and st.session_state.selected_item == row['item_id']:
                         with st.expander("Item Details", expanded=True):
                             display_item_details(row)
+                    
+                    st.markdown('</div>', unsafe_allow_html=True)
     else:
         # List view
         for row in items:
-            with st.expander(f"{row['title']} (${float(row['price']):.2f}) - {row['username']}"):
+            # Status badge HTML for list view
+            status_class = f"status-{row['status'].lower()}" if row['status'] in ['Available', 'Pending', 'Sold'] else "status-available"
+            status_badge = f'<span class="status-badge {status_class}">{row["status"]}</span>'
+            
+            # Create list item with status badge
+            with st.expander(f"{status_badge} {row['title']} (${float(row['price']):.2f}) - {row['username']}", expanded=False):
                 display_item_details(row)
 
     # Pagination controls if not specific item
@@ -321,10 +402,16 @@ def display_item_details(row):
                 st.image(image, use_container_width=True)
             except Exception:
                 st.warning("Image could not be displayed")
+        else:
+            st.info("No image available")
     
     with col2:
-        # Display all item details
-        st.markdown(f"### {row['title']}")
+        # Create status badge HTML
+        status_class = f"status-{row['status'].lower()}" if row['status'] in ['Available', 'Pending', 'Sold'] else "status-available"
+        status_badge = f'<span class="status-badge {status_class}">{row["status"]}</span>'
+        
+        # Display all item details with the status badge
+        st.markdown(f"### {row['title']} {status_badge}", unsafe_allow_html=True)
         st.markdown(f"**Price:** ${float(row['price']):.2f}")
         st.markdown(f"**Category:** {row['category'] or 'Not specified'}")
         st.markdown(f"**Condition:** {row['condition_status']}")
@@ -340,7 +427,6 @@ def display_item_details(row):
         if row.get('contact_preference'):
             st.markdown(f"**Preferred Contact Method:** {row['contact_preference']}")
         
-        st.markdown(f"**Status:** {row['status']}")
         st.markdown(f"**Listed on:** {row['created_at'].strftime('%B %d, %Y')}")
     
     # Full description section

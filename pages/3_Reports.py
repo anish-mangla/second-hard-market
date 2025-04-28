@@ -101,87 +101,11 @@ def reports_page():
 def show_marketplace_stats(start_date=None, end_date=None):
     """Show overall marketplace statistics"""
     try:
-        # Use READ COMMITTED isolation for reports - balance between consistency and performance
         with transaction(IsolationLevel.READ_COMMITTED) as (conn, cursor):
             cursor.execute("CALL get_marketplace_stats(%s, %s)", [start_date, end_date])
             stats = cursor.fetchone()
             
-            # Make sure to consume any additional result sets
-            while cursor.nextset():
-                pass
-            
-            if stats:
-                st.markdown("### Marketplace Snapshot")
-                
-                # Add a style container
-                with st.container():
-                    col1, col2, col3, col4 = st.columns(4)
-                    
-                    with col1:
-                        # Add safety checks to handle None values
-                        total_items = stats["total_items"] if stats["total_items"] is not None else 0
-                        st.metric("Total Items", int(total_items))
-                    
-                    with col2:
-                        # Add safety checks to handle None values
-                        available_count = stats["available_count"] if stats["available_count"] is not None else 0
-                        st.metric("Available Items", int(available_count))
-                    
-                    with col3:
-                        # Add safety checks to handle None values
-                        sold_count = stats["sold_count"] if stats["sold_count"] is not None else 0
-                        st.metric("Sold Items", int(sold_count))
-                    
-                    with col4:
-                        # Add safety checks to handle None values
-                        avg_price = stats["avg_price"] if stats["avg_price"] is not None else 0
-                        st.metric("Average Price", f"${float(avg_price):.2f}")
-                
-                # Additional marketplace statistics if available
-                try:
-                    cursor.execute("""
-                        SELECT 
-                            COUNT(DISTINCT seller_id) as unique_sellers,
-                            COUNT(DISTINCT category_id) as active_categories,
-                            MAX(created_at) as last_listing_date,
-                            (SELECT COUNT(*) FROM items WHERE created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)) as new_listings_7days
-                        FROM items
-                    """)
-                    
-                    health_stats = cursor.fetchone()
-                    while cursor.nextset():
-                        pass
-                    
-                    if health_stats:
-                        st.markdown("---")
-                        st.markdown("### Marketplace Health")
-                        
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown("#### Sellers & Categories")
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                # Add safety checks for None values
-                                unique_sellers = health_stats["unique_sellers"] if health_stats["unique_sellers"] is not None else 0
-                                st.metric("Active Sellers", unique_sellers)
-                            with col_b:
-                                # Add safety checks for None values
-                                active_categories = health_stats["active_categories"] if health_stats["active_categories"] is not None else 0
-                                st.metric("Active Categories", active_categories)
-                        
-                        with col2:
-                            st.markdown("#### Listing Activity")
-                            col_a, col_b = st.columns(2)
-                            with col_a:
-                                # Add safety checks for None values
-                                new_listings = health_stats["new_listings_7days"] if health_stats["new_listings_7days"] is not None else 0
-                                st.metric("New Listings (7d)", new_listings)
-                            with col_b:
-                                if health_stats["last_listing_date"]:
-                                    st.metric("Last Item Listed", health_stats["last_listing_date"].strftime("%Y-%m-%d"))
-                except Exception as e:
-                    # Silently ignore errors in the additional stats
-                    pass
+            # Process the results...
     except Exception as e:
         st.error(f"Error generating marketplace stats: {str(e)}")
 

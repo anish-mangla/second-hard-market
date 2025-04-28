@@ -596,7 +596,7 @@ def show_user_activity():
                 performance_cols = ['Seller', 'Total Listings', 'Items Sold', 'Sell-through Rate', 'Average Price']
                 st.dataframe(display_df[performance_cols], use_container_width=True)
             else:
-                st.info("No seller activity data available.")
+                    st.info("No seller activity data available.")
     except Exception as e:
         st.error(f"Error generating user activity analytics: {str(e)}")
 
